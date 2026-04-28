@@ -26,8 +26,39 @@ struct CommitListView: View {
                 }
                 .listStyle(.inset)
                 .alternatingRowBackgrounds(.disabled)
+
+                if session.plan.count < session.totalNonMergeCount {
+                    Divider()
+                    loadMoreFooter
+                }
             }
         }
+    }
+
+    /// Footer shown when more commits exist beyond the current view.
+    /// Two affordances: a step ("Load N more") and a jump ("Load all").
+    private var loadMoreFooter: some View {
+        let remaining = session.totalNonMergeCount - session.plan.count
+        let step = min(RebaseSession.loadMoreIncrement, remaining)
+        return HStack(spacing: 12) {
+            Text("\(remaining) older commit\(remaining == 1 ? "" : "s") not shown")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button("Load \(step) more") {
+                session.loadMore(by: step)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            Button("Load all") {
+                session.loadAll()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color(.windowBackgroundColor))
     }
 
     private var header: some View {
@@ -42,12 +73,21 @@ struct CommitListView: View {
                     .clipShape(Capsule())
             }
             Spacer()
-            Text("\(session.plan.count) commits")
+            Text(headerCountLabel)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+
+    /// "12 commits" when everything's loaded; "12 of 24 commits" when
+    /// the view is intentionally truncated to a depth less than total.
+    private var headerCountLabel: String {
+        if session.totalNonMergeCount > 0 && session.plan.count < session.totalNonMergeCount {
+            return "\(session.plan.count) of \(session.totalNonMergeCount) commits"
+        }
+        return "\(session.plan.count) commit\(session.plan.count == 1 ? "" : "s")"
     }
 
     private var emptyState: some View {

@@ -19,8 +19,12 @@ struct RebaseEngine {
 
     /// Load up to `depth` most recent commits on the current branch.
     /// Returns the commits oldest-first (matching the `git rebase -i`
-    /// TODO order on screen) and the base commit's SHA.
-    func loadPlan(depth: Int = 12) throws -> (plan: [PlanItem], base: String, branch: String) {
+    /// TODO order on screen), the base commit's SHA, the branch name,
+    /// and the total number of non-merge commits reachable from HEAD
+    /// (used by the UI to decide whether to show "load more").
+    func loadPlan(depth: Int = 12) throws -> (
+        plan: [PlanItem], base: String, branch: String, totalNonMerge: Int
+    ) {
         // Detect repo root so a path like `/repo/subdir` still works.
         let toplevel = try runner.run(["rev-parse", "--show-toplevel"])
         guard toplevel.isSuccess else {
@@ -31,10 +35,15 @@ struct RebaseEngine {
         let branch = branchResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // Cap depth at the actual reachable count so a tiny repo doesn't
-        // blow up trying to resolve HEAD~depth.
-        let countResult = try runner.run(["rev-list", "--count", "HEAD"])
-        let total = Int(countResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
-        let n = min(depth, max(0, total - 1))   // need at least one ancestor as base
+        // blow up trying to resolve HEAD~depth. We use the non-merge
+        // count for the cap because the loaded list and the "total"
+        // shown to the user both use --no-merges; otherwise the cap
+        // would let us request a depth we can never display.
+        let totalResult = try runner.run(["rev-list", "--count", "HEAD"])
+        let totalAll = Int(totalResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+        let totalNoMergeResult = try runner.run(["rev-list", "--count", "--no-merges", "HEAD"])
+        let totalNoMerge = Int(totalNoMergeResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+        let n = min(depth, max(0, totalAll - 1))   // need at least one ancestor as base
         guard n > 0 else {
             throw EngineError.tooFewCommits
         }
@@ -77,7 +86,12 @@ struct RebaseEngine {
         }
         let base = baseResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        return (plan: commits.map { PlanItem(commit: $0, verb: .pick) }, base: base, branch: branch)
+        return (
+            plan: commits.map { PlanItem(commit: $0, verb: .pick) },
+            base: base,
+            branch: branch,
+            totalNonMerge: totalNoMerge
+        )
     }
 
     /// Patch + stat for a single commit, used by the diff pane.

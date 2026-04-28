@@ -14,6 +14,20 @@ final class RebaseSession: ObservableObject {
     @Published var isApplying = false
     @Published var lastOutcome: RebaseOutcome?
 
+    /// How many commits the user asked us to load. Distinct from
+    /// `plan.count` because the engine caps the request at the actual
+    /// reachable depth (e.g. asking for 50 in a 24-commit repo loads 24).
+    @Published var requestedDepth: Int = 12
+
+    /// Total non-merge commits reachable from HEAD. Used to decide
+    /// whether to show "load more" / "load all" affordances.
+    @Published var totalNonMergeCount: Int = 0
+
+    /// Default step size for the "Load N more" button.
+    /// `nonisolated` so it can be used as a default-argument value in
+    /// methods on this @MainActor class without Swift 6 complaining.
+    nonisolated static let loadMoreIncrement = 12
+
     /// True when there's a plan loaded and at least one row has a non-pick
     /// verb or has been reordered. Drives the Apply button's enabled state
     /// — a no-op rebase is harmless but pointless.
@@ -42,28 +56,59 @@ final class RebaseSession: ObservableObject {
         }
     }
 
-    func load(repo: URL) {
+    func load(repo: URL, depth: Int? = nil) {
         repoURL = repo
+        let d = depth ?? requestedDepth
         let engine = RebaseEngine(runner: GitRunner(cwd: repo))
         do {
-            let result = try engine.loadPlan(depth: 12)
+            let result = try engine.loadPlan(depth: d)
             plan = result.plan
             baseHash = result.base
             branch = result.branch.isEmpty ? "(detached)" : result.branch
+            totalNonMergeCount = result.totalNonMerge
+            requestedDepth = d
             originalOrder = plan.map(\.id)
             selectedID = plan.last?.id    // most-recent commit selected by default
-            status = "Loaded \(plan.count) commit\(plan.count == 1 ? "" : "s") on \(branch)."
+            let suffix = plan.count < totalNonMergeCount
+                ? " of \(totalNonMergeCount) on \(branch)."
+                : " (all) on \(branch)."
+            status = "Loaded \(plan.count) commit\(plan.count == 1 ? "" : "s")\(suffix)"
             recomputeChangedFlag()
             loadDiffForSelection()
         } catch {
             status = error.localizedDescription
             plan = []
             baseHash = ""
+            totalNonMergeCount = 0
             originalOrder = []
             selectedID = nil
             diffText = ""
             hasChanges = false
         }
+    }
+
+    /// Reload the current repo at a new depth. Discards in-progress
+    /// plan edits — the user is opting in by changing depth, and
+    /// preserving partial edits across a different commit window
+    /// surfaces a thicket of edge cases (commits that fall outside the
+    /// new window, etc.) that aren't worth solving for v0.1.
+    func reload(depth: Int) {
+        guard let repo = repoURL else { return }
+        load(repo: repo, depth: depth)
+    }
+
+    /// Extend the loaded view by N commits (default `loadMoreIncrement`).
+    /// Caps at `totalNonMergeCount` so we never request more than exists.
+    func loadMore(by additional: Int = RebaseSession.loadMoreIncrement) {
+        guard totalNonMergeCount > 0 else { return }
+        let target = min(plan.count + additional, totalNonMergeCount)
+        reload(depth: target)
+    }
+
+    /// Load every non-merge commit reachable from HEAD.
+    func loadAll() {
+        guard totalNonMergeCount > 0 else { return }
+        reload(depth: totalNonMergeCount)
     }
 
     // MARK: - Mutate plan

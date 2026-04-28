@@ -62,9 +62,9 @@ struct RebaseEngine {
                 return Commit(
                     fullHash: String(parts[0]),
                     shortHash: String(parts[1]),
+                    subject: String(parts[4]),
                     author: String(parts[2]),
-                    date: String(parts[3]),
-                    subject: String(parts[4])
+                    date: String(parts[3])
                 )
             }
 

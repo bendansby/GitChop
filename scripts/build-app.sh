@@ -79,9 +79,43 @@ if [[ "$INSTALL" == "1" ]]; then
     DEST="/Applications/$APP_NAME.app"
     echo "==> Installing to $DEST"
     pkill -x "$APP_NAME" 2>/dev/null || true
+    # Give the kill a beat to release file handles before we replace
+    # the bundle. Without this, ditto can race the dying process and
+    # produce a half-stale install.
+    sleep 0.2
     rm -rf "$DEST"
     ditto --noextattr --noacl "$APP_DIR" "$DEST"
-    open "$DEST"
+
+    # Force LaunchServices to re-register the bundle. Without this,
+    # `open` against a freshly-replaced .app sometimes returns
+    # `_LSOpenURLsWithCompletionHandler() failed with error -600`
+    # because LS still has the old inode in its cache. -f registers
+    # immediately rather than waiting for the on-disk-change watcher.
+    LSREG="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister"
+    if [[ -x "$LSREG" ]]; then
+        "$LSREG" -f "$DEST" >/dev/null 2>&1 || true
+    fi
+
+    # Retry `open` until the process is visible. LSOpenURLsWith… -600
+    # is racy; one retry after a 0.5s pause clears it virtually every
+    # time, but cap at ~3s so a real failure surfaces instead of
+    # hanging.
+    launched=0
+    for attempt in 1 2 3 4 5 6; do
+        open "$DEST" 2>/dev/null || true
+        # Give the process a moment to actually start.
+        sleep 0.4
+        if pgrep -x "$APP_NAME" >/dev/null; then
+            launched=1
+            break
+        fi
+    done
+    if [[ "$launched" == "1" ]]; then
+        echo "==> Launched: $DEST"
+    else
+        echo "==> Installed: $DEST"
+        echo "    (open did not bring the app forward — try double-clicking it)"
+    fi
     echo
     echo "Done: $DEST"
 else

@@ -50,9 +50,6 @@ struct SplitCommitSheet: View {
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Image(systemName: "scissors")
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(.tint)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Split commit")
                     .font(.title3.weight(.semibold))
@@ -69,6 +66,9 @@ struct SplitCommitSheet: View {
                 }
             }
             Spacer()
+            Image(systemName: "scissors")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(.tint)
         }
     }
 
@@ -125,11 +125,11 @@ struct SplitCommitSheet: View {
     }
 
     private func form(diff: ParsedDiff) -> some View {
-        HSplitView {
+        HStack(alignment: .top, spacing: 14) {
             hunksColumn(diff: diff)
-                .frame(minWidth: 320, idealWidth: 380)
+                .frame(maxWidth: .infinity)
             bucketsColumn
-                .frame(minWidth: 280, idealWidth: 320)
+                .frame(maxWidth: .infinity)
         }
     }
 
@@ -183,6 +183,7 @@ struct SplitCommitSheet: View {
 
     private func hunkRow(_ hunk: ParsedDiff.Hunk) -> some View {
         let assignedBucketID = assignments[hunk.id]
+        let bucketIdx = assignedBucketID.flatMap { id in buckets.firstIndex(where: { $0.id == id }) }
         return HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(hunk.file)
@@ -205,50 +206,43 @@ struct SplitCommitSheet: View {
                 }
                 .font(.system(.caption2, design: .monospaced).bold())
             }
-            Spacer()
-            bucketPicker(for: hunk, assignedBucketID: assignedBucketID)
+            Spacer(minLength: 8)
+            assignmentMenu(for: hunk, assignedBucketID: assignedBucketID, idx: bucketIdx)
         }
         .padding(.vertical, 5)
         .padding(.horizontal, 6)
     }
 
-    private func bucketPicker(for hunk: ParsedDiff.Hunk, assignedBucketID: UUID?) -> some View {
-        Menu {
-            ForEach(Array(buckets.enumerated()), id: \.element.id) { idx, bucket in
-                Button {
-                    assignments[hunk.id] = bucket.id
-                } label: {
-                    if assignedBucketID == bucket.id {
-                        Label("Bucket \(idx + 1)", systemImage: "checkmark")
-                    } else {
-                        Text("Bucket \(idx + 1)")
-                    }
+    /// Trailing assignment control. Native NSPopUpButton via
+    /// `Picker(.menu)` — way more reliable than `Menu` + custom label,
+    /// which collapses unpredictably under `.borderlessButton` style.
+    private func assignmentMenu(for hunk: ParsedDiff.Hunk, assignedBucketID: UUID?, idx: Int?) -> some View {
+        Picker(
+            "Bucket",
+            selection: Binding<UUID?>(
+                get: { assignments[hunk.id] },
+                set: { newValue in
+                    if let v = newValue { assignments[hunk.id] = v }
+                    else { assignments.removeValue(forKey: hunk.id) }
                 }
-            }
-        } label: {
-            if let bid = assignedBucketID, let idx = buckets.firstIndex(where: { $0.id == bid }) {
-                Text("Bucket \(idx + 1)")
-                    .font(.caption.bold())
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(
-                        Capsule().fill(Color.accentColor.opacity(0.18))
-                    )
-                    .foregroundStyle(Color.accentColor)
-            } else {
-                Text("Unassigned")
-                    .font(.caption)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(
-                        Capsule().strokeBorder(Color.secondary.opacity(0.4), lineWidth: 1)
-                    )
-                    .foregroundStyle(.secondary)
+            )
+        ) {
+            Text("Unassigned").tag(UUID?.none)
+            ForEach(Array(buckets.enumerated()), id: \.element.id) { i, bucket in
+                Text("Bucket \(i + 1)").tag(UUID?.some(bucket.id))
             }
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
+        .pickerStyle(.menu)
+        .labelsHidden()
         .fixedSize()
+    }
+
+    /// Index → color mapping. Cycles through a small palette so each
+    /// bucket has a distinct visual identity shared between the hunk
+    /// row's assignment dot and the bucket card's number badge.
+    private func bucketColor(_ idx: Int) -> Color {
+        let palette: [Color] = [.blue, .purple, .orange, .pink, .teal, .indigo]
+        return palette[idx % palette.count]
     }
 
     // MARK: - Buckets column
@@ -274,27 +268,40 @@ struct SplitCommitSheet: View {
                         bucketCard(idx: idx, bucket: bucket)
                     }
                 }
-                .padding(.horizontal, 4)
-                .padding(.vertical, 4)
+                .padding(8)
             }
+            .background(Color(.textBackgroundColor))
+            .overlay(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .strokeBorder(Color.secondary.opacity(0.18), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         }
     }
 
     private func bucketCard(idx: Int, bucket: EditPlan.Bucket) -> some View {
         let hunkCount = assignments.values.filter { $0 == bucket.id }.count
         let counts = lineCounts(for: bucket.id)
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("Bucket \(idx + 1)")
+        let color = bucketColor(idx)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                ZStack {
+                    Circle().fill(color)
+                    Text("\(idx + 1)")
+                        .font(.system(.caption2, design: .rounded).weight(.bold))
+                        .foregroundStyle(.white)
+                }
+                .frame(width: 18, height: 18)
+                Text("Commit \(idx + 1)")
                     .font(.callout.weight(.semibold))
                 Spacer()
                 if buckets.count > 2 {
                     Button {
                         removeBucket(bucket.id)
                     } label: {
-                        Image(systemName: "trash")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.tertiary)
                     }
                     .buttonStyle(.borderless)
                     .help("Remove this bucket — its hunks become Unassigned")
@@ -303,25 +310,41 @@ struct SplitCommitSheet: View {
             TextField("Commit message", text: bindingForSubject(of: bucket.id))
                 .textFieldStyle(.roundedBorder)
                 .font(.callout)
-            HStack(spacing: 12) {
-                Text("\(hunkCount) hunk\(hunkCount == 1 ? "" : "s")")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if counts.added > 0 {
-                    Text("+\(counts.added)")
-                        .foregroundStyle(Color(red: 0.20, green: 0.56, blue: 0.30))
+            if hunkCount == 0 {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.left")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                    Text("Assign hunks to this commit")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .italic()
                 }
-                if counts.removed > 0 {
-                    Text("−\(counts.removed)")
-                        .foregroundStyle(Color(red: 0.78, green: 0.22, blue: 0.22))
+            } else {
+                HStack(spacing: 10) {
+                    Text("\(hunkCount) hunk\(hunkCount == 1 ? "" : "s")")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if counts.added > 0 {
+                        Text("+\(counts.added)")
+                            .foregroundStyle(Color(red: 0.20, green: 0.56, blue: 0.30))
+                    }
+                    if counts.removed > 0 {
+                        Text("−\(counts.removed)")
+                            .foregroundStyle(Color(red: 0.78, green: 0.22, blue: 0.22))
+                    }
                 }
+                .font(.system(.caption2, design: .monospaced).bold())
             }
-            .font(.system(.caption2, design: .monospaced).bold())
         }
         .padding(10)
         .background(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(Color.secondary.opacity(0.06))
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(color.opacity(0.06))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(color.opacity(hunkCount == 0 ? 0.18 : 0.30), lineWidth: 1)
         )
     }
 
@@ -343,31 +366,36 @@ struct SplitCommitSheet: View {
     }
 
     private var statusLine: some View {
-        Group {
+        // Higher-contrast colors for both light and dark mode — the
+        // system `.green` / `.orange` are pale on white. These match
+        // SF Symbols' standard alert palette better.
+        let okColor = Color(red: 0.13, green: 0.55, blue: 0.20)
+        let warnColor = Color(red: 0.78, green: 0.42, blue: 0.05)
+        return Group {
             if isValid {
                 Label("All hunks assigned", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(Color.green)
+                    .foregroundStyle(okColor)
             } else if unassignedCount > 0 {
                 Label(
                     "\(unassignedCount) hunk\(unassignedCount == 1 ? "" : "s") unassigned",
-                    systemImage: "exclamationmark.circle"
+                    systemImage: "exclamationmark.circle.fill"
                 )
-                .foregroundStyle(.orange)
+                .foregroundStyle(warnColor)
             } else if emptyBucketCount > 0 {
                 Label(
                     "\(emptyBucketCount) bucket\(emptyBucketCount == 1 ? "" : "s") empty",
-                    systemImage: "exclamationmark.circle"
+                    systemImage: "exclamationmark.circle.fill"
                 )
-                .foregroundStyle(.orange)
+                .foregroundStyle(warnColor)
             } else if missingSubjectCount > 0 {
                 Label(
-                    "\(missingSubjectCount) bucket\(missingSubjectCount == 1 ? "" : "s") need a message",
-                    systemImage: "exclamationmark.circle"
+                    "\(missingSubjectCount) bucket\(missingSubjectCount == 1 ? "" : "s") \(missingSubjectCount == 1 ? "needs" : "need") a message",
+                    systemImage: "exclamationmark.circle.fill"
                 )
-                .foregroundStyle(.orange)
+                .foregroundStyle(warnColor)
             }
         }
-        .font(.caption)
+        .font(.callout.weight(.medium))
     }
 
     // MARK: - Validation

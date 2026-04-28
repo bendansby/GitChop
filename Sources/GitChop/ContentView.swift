@@ -65,6 +65,39 @@ private struct ApplyButton: View {
     }
 }
 
+/// Hosts the split-commit sheet for the active session. Lives in its
+/// own view so it can `@ObservedObject` the session — `ContentView`
+/// only observes `Workspace`, which doesn't republish when a session's
+/// `@Published splitSheetCommitID` changes. Without this dedicated
+/// observer the sheet binding's getter never re-evaluates and the
+/// sheet never appears when the user picks `edit` or "Configure split…".
+private struct SplitSheetHost: ViewModifier {
+    @ObservedObject var session: RebaseSession
+
+    func body(content: Content) -> some View {
+        content.sheet(
+            isPresented: Binding(
+                get: { session.splitSheetCommitID != nil },
+                set: { if !$0 { session.splitSheetCommitID = nil } }
+            )
+        ) {
+            if let id = session.splitSheetCommitID {
+                SplitCommitSheet(
+                    session: session,
+                    planItemID: id,
+                    onSave: { plan in
+                        session.setEditPlan(of: id, to: plan)
+                        session.splitSheetCommitID = nil
+                    },
+                    onCancel: {
+                        session.splitSheetCommitID = nil
+                    }
+                )
+            }
+        }
+    }
+}
+
 /// Top-level layout. Reads the workspace, renders the tab strip, and
 /// pipes the active session into the inner views so they don't have
 /// to know about multi-tab state.
@@ -124,31 +157,6 @@ struct ContentView: View {
                 }
             }
         }
-        // Split-commit sheet. Driven by session.splitSheetCommitID so
-        // the verb-chip "edit" path can pop the sheet without going
-        // through ContentView's @State (CommitListView doesn't have
-        // direct access to that state). Cleared on Save/Cancel.
-        .sheet(
-            isPresented: Binding(
-                get: { workspace.activeSession?.splitSheetCommitID != nil },
-                set: { if !$0 { workspace.activeSession?.splitSheetCommitID = nil } }
-            )
-        ) {
-            if let session = workspace.activeSession,
-               let id = session.splitSheetCommitID {
-                SplitCommitSheet(
-                    session: session,
-                    planItemID: id,
-                    onSave: { plan in
-                        session.setEditPlan(of: id, to: plan)
-                        session.splitSheetCommitID = nil
-                    },
-                    onCancel: {
-                        session.splitSheetCommitID = nil
-                    }
-                )
-            }
-        }
     }
 
     /// The main split + status bar, parameterized on the active session.
@@ -168,6 +176,7 @@ struct ContentView: View {
             statusBar(session: session)
         }
         .environmentObject(session)
+        .modifier(SplitSheetHost(session: session))
         // Tag with session.id so SwiftUI rebuilds the subtree when the
         // active tab changes, instead of re-using the same view tree
         // and confusing onAppear/state.

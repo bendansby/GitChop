@@ -20,10 +20,11 @@ struct RebaseEngine {
     /// Load up to `depth` most recent commits on the current branch.
     /// Returns the commits oldest-first (matching the `git rebase -i`
     /// TODO order on screen), the base commit's SHA, the branch name,
-    /// and the total number of non-merge commits reachable from HEAD
-    /// (used by the UI to decide whether to show "load more").
+    /// and `chopableTotal` — the maximum number of commits the user
+    /// can ever load into the plan (= total non-merge commits minus
+    /// the root, since the root must always be the rebase base).
     func loadPlan(depth: Int = 12) throws -> (
-        plan: [PlanItem], base: String, branch: String, totalNonMerge: Int
+        plan: [PlanItem], base: String, branch: String, chopableTotal: Int
     ) {
         // Detect repo root so a path like `/repo/subdir` still works.
         let toplevel = try runner.run(["rev-parse", "--show-toplevel"])
@@ -34,25 +35,37 @@ struct RebaseEngine {
         let branchResult = try runner.run(["symbolic-ref", "--short", "-q", "HEAD"])
         let branch = branchResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // Cap depth at the actual reachable count so a tiny repo doesn't
-        // blow up trying to resolve HEAD~depth. We use the non-merge
-        // count for the cap because the loaded list and the "total"
-        // shown to the user both use --no-merges; otherwise the cap
-        // would let us request a depth we can never display.
-        let totalResult = try runner.run(["rev-list", "--count", "HEAD"])
-        let totalAll = Int(totalResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+        // The maximum chopable depth is total-non-merge MINUS the root
+        // commit. The root has no parent, so `<root>^` ("the parent of
+        // the oldest commit in the plan, which is our rebase base")
+        // doesn't resolve. Always leave the root commit out of the
+        // plan and use it as the base instead.
+        //
+        // Earlier versions tried to load N non-merge commits and
+        // compute base = `<oldest>^`, which exploded with
+        // "ambiguous argument 'sha^'" the first time someone asked
+        // for all commits in a repo with no leading merge layers.
         let totalNoMergeResult = try runner.run(["rev-list", "--count", "--no-merges", "HEAD"])
         let totalNoMerge = Int(totalNoMergeResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
-        let n = min(depth, max(0, totalAll - 1))   // need at least one ancestor as base
+        let chopableTotal = max(0, totalNoMerge - 1)
+        let n = min(max(0, depth), chopableTotal)
         guard n > 0 else {
             throw EngineError.tooFewCommits
         }
 
-        // %x09 = TAB. We split on TAB to keep subjects with spaces intact.
+        // We request `n + 1` commits: the oldest is the rebase base,
+        // the remaining `n` form the plan. Asking for n+1 lets us
+        // discover the base in a single `git log` call without a
+        // separate `rev-parse <oldest>^`, AND it transparently handles
+        // the case where the (n+1)th commit happens to be the root —
+        // the root naturally ends up as the base instead of breaking
+        // the load.
+        //
+        // %x09 = TAB. Split on TAB so subjects with spaces stay intact.
         // Format: full-sha \t short-sha \t author \t date \t subject
         let format = "%H%x09%h%x09%an%x09%ad%x09%s"
         let logResult = try runner.run([
-            "log", "-\(n)", "--no-merges",
+            "log", "-\(n + 1)", "--no-merges",
             "--date=format:%b %-d, %Y",
             "--pretty=format:\(format)",
         ])
@@ -62,7 +75,7 @@ struct RebaseEngine {
 
         // git log emits newest-first; flip to oldest-first to match how
         // `git rebase -i` presents its TODO list.
-        let commits: [Commit] = logResult.stdout
+        let allCommits: [Commit] = logResult.stdout
             .split(separator: "\n", omittingEmptySubsequences: true)
             .reversed()
             .compactMap { line in
@@ -77,20 +90,17 @@ struct RebaseEngine {
                 )
             }
 
-        guard let oldest = commits.first else {
+        // Need at least 2: one for the base and one for the plan.
+        guard allCommits.count >= 2, let baseCommit = allCommits.first else {
             throw EngineError.tooFewCommits
         }
-        let baseResult = try runner.run(["rev-parse", "\(oldest.fullHash)^"])
-        guard baseResult.isSuccess else {
-            throw EngineError.gitFailed("rev-parse base: \(baseResult.stderr)")
-        }
-        let base = baseResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let planCommits = Array(allCommits.dropFirst())
 
         return (
-            plan: commits.map { PlanItem(commit: $0, verb: .pick) },
-            base: base,
+            plan: planCommits.map { PlanItem(commit: $0, verb: .pick) },
+            base: baseCommit.fullHash,
             branch: branch,
-            totalNonMerge: totalNoMerge
+            chopableTotal: chopableTotal
         )
     }
 

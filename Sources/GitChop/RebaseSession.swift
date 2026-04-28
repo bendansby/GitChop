@@ -65,8 +65,14 @@ final class RebaseSession: ObservableObject {
             plan = result.plan
             baseHash = result.base
             branch = result.branch.isEmpty ? "(detached)" : result.branch
-            totalNonMergeCount = result.totalNonMerge
-            requestedDepth = d
+            // chopableTotal is the most we can ever load (total non-merge
+            // minus the root, which is always the base). Use it as the
+            // total count the UI shows, so "X of N" is true.
+            totalNonMergeCount = result.chopableTotal
+            // Track what we actually loaded, not what we asked for —
+            // the engine caps at chopableTotal, so a request for 100
+            // in a 24-commit repo turns into a 23-commit load.
+            requestedDepth = plan.count
             originalOrder = plan.map(\.id)
             selectedID = plan.last?.id    // most-recent commit selected by default
             let suffix = plan.count < totalNonMergeCount

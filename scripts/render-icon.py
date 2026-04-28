@@ -90,27 +90,37 @@ def vibrant_dot(diameter, base_color, ring_color=(255, 255, 255, 220), ring_w=12
     # Base fill
     d.ellipse((ring_w, ring_w, ring_w + diameter - 1, ring_w + diameter - 1), fill=base_color)
 
-    # Inner highlight: small offset white circle at upper-left, blurred
-    # and clipped to the dot's interior. Reads as a glossy specular.
+    # Subtle specular highlight: a wide soft ellipse near the top of
+    # the dot. Drawn on its own RGBA layer, clipped to the dot's
+    # interior via Image.composite (NOT Image.paste — paste with a
+    # mask REPLACES alpha, which would erase the base color), then
+    # alpha-composited onto the dot so the white-on-color blends
+    # instead of overwriting.
     highlight = Image.new("RGBA", (s, s), (0, 0, 0, 0))
     hd = ImageDraw.Draw(highlight)
-    hl_d = int(diameter * 0.55)
-    hl_x = ring_w + int(diameter * 0.18)
-    hl_y = ring_w + int(diameter * 0.10)
+    hl_w = int(diameter * 0.78)
+    hl_h = int(diameter * 0.32)
+    hl_x = ring_w + (diameter - hl_w) // 2
+    hl_y = ring_w + int(diameter * 0.05)
     hd.ellipse(
-        (hl_x, hl_y, hl_x + hl_d, hl_y + hl_d),
-        fill=(255, 255, 255, 110),
+        (hl_x, hl_y, hl_x + hl_w, hl_y + hl_h),
+        fill=(255, 255, 255, 95),
     )
-    highlight = highlight.filter(ImageFilter.GaussianBlur(int(diameter * 0.06)))
+    highlight = highlight.filter(ImageFilter.GaussianBlur(int(diameter * 0.04)))
 
-    # Mask the highlight to the dot's interior so it doesn't bleed past
-    # the bezel ring.
-    mask = Image.new("L", (s, s), 0)
-    ImageDraw.Draw(mask).ellipse(
+    # Build a mask of the dot's interior and use it to clip the
+    # highlight to a transparent layer of the same size.
+    interior_mask = Image.new("L", (s, s), 0)
+    ImageDraw.Draw(interior_mask).ellipse(
         (ring_w, ring_w, ring_w + diameter - 1, ring_w + diameter - 1),
         fill=255,
     )
-    img.paste(highlight, (0, 0), mask)
+    clipped_highlight = Image.composite(
+        highlight,
+        Image.new("RGBA", (s, s), (0, 0, 0, 0)),
+        interior_mask,
+    )
+    img.alpha_composite(clipped_highlight)
     return img
 
 
@@ -291,11 +301,14 @@ def render():
     )
     icon.alpha_composite(chain)
 
-    # Vibrant verb-chip palette — saturated, glass-y, macOS-26-flavor.
-    PICK   = (0xE3, 0xEB, 0xF6, 255)   # bright pearl
-    SQUASH = (0x2B, 0x6B, 0xFF, 255)   # cobalt
-    FIXUP  = (0x2E, 0xCD, 0x7C, 255)   # emerald
-    DROP   = (0xFF, 0x4A, 0x57, 255)   # crimson
+    # Vibrant verb-chip palette — saturated enough to read against the
+    # bright blue background. PICK lands as a warm slate so it doesn't
+    # vanish into the bg; the other three are punched-up versions of
+    # the in-app verb colors.
+    PICK   = (0x6B, 0x82, 0xA8, 255)   # warm slate (readable on blue)
+    SQUASH = (0x1E, 0x5B, 0xFF, 255)   # vivid cobalt
+    FIXUP  = (0x16, 0xC1, 0x6C, 255)   # vivid emerald
+    DROP   = (0xFF, 0x39, 0x4D, 255)   # vivid crimson
 
     dot_d = int(SIZE * 0.105)
     ring_w = int(SIZE * 0.012)

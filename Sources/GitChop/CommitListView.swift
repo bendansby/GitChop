@@ -42,12 +42,69 @@ struct CommitListView: View {
                     .clipShape(Capsule())
             }
             Spacer()
-            Text(headerCountLabel)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            // The count IS the depth menu — single point of interaction
+            // for "how many commits am I seeing and how many can I get".
+            // When no repo is loaded we drop the menu entirely instead
+            // of showing a disabled-everything dropdown.
+            if session.repoURL != nil {
+                depthMenu
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+
+    /// Header-embedded depth picker. Click the count → choose how many
+    /// commits to load.
+    private var depthMenu: some View {
+        Menu {
+            ForEach([12, 25, 50, 100], id: \.self) { d in
+                Button {
+                    session.reload(depth: d)
+                } label: {
+                    if d == session.plan.count {
+                        Label("Last \(d) commits", systemImage: "checkmark")
+                    } else {
+                        Text("Last \(d) commits")
+                    }
+                }
+                // A choice that's >= the chopable max while we already
+                // hit that max is meaningless, so disable it.
+                .disabled(d > session.totalNonMergeCount && session.plan.count >= session.totalNonMergeCount)
+            }
+            Divider()
+            Button {
+                session.loadAll()
+            } label: {
+                if session.plan.count == session.totalNonMergeCount && session.totalNonMergeCount > 0 {
+                    Label("All \(session.totalNonMergeCount) commits", systemImage: "checkmark")
+                } else if session.totalNonMergeCount > 0 {
+                    Text("All \(session.totalNonMergeCount) commits")
+                } else {
+                    Text("All commits")
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(headerCountLabel)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.secondary.opacity(0.10))
+            )
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Choose how many recent commits to show")
     }
 
     /// "12 commits" when everything's loaded; "12 of 24 commits" when

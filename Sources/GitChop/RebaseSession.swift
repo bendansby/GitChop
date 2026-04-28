@@ -43,6 +43,12 @@ final class RebaseSession: ObservableObject, Identifiable {
     /// commit ID + verb on every plan mutation.
     private var originalOrder: [String] = []
 
+    /// Whether the user has changed the order of the plan rows since
+    /// load. Read by the confirmation sheet to summarize the reorder.
+    var isReordered: Bool {
+        plan.map(\.id) != originalOrder
+    }
+
     var repoName: String {
         repoURL?.lastPathComponent ?? "GitChop"
     }

@@ -11,17 +11,22 @@ import SwiftUI
 ///   • no changes pending → outline seal, secondary color, disabled
 ///   • changes pending    → filled seal, tint color, ⌘↩ live
 ///   • applying           → progress spinner, disabled
+///
+/// Clicking the armed button does NOT run the rebase directly — it
+/// opens the confirmation sheet first. Apply rewrites real history,
+/// so even with the auto-backup ref a deliberate confirmation step
+/// is the right default.
 private struct ApplyButton: View {
     @ObservedObject var session: RebaseSession
-    @Binding var showOutcome: Bool
+    @Binding var showConfirm: Bool
 
     /// Wrapper init so we can pass an Optional<RebaseSession> from the
     /// parent without forcing the parent to unwrap. We synthesize a
     /// throwaway placeholder when there's no active session — the
     /// button just renders its disabled state and never triggers.
-    init(session: RebaseSession?, showOutcome: Binding<Bool>) {
+    init(session: RebaseSession?, showConfirm: Binding<Bool>) {
         self.session = session ?? RebaseSession()
-        self._showOutcome = showOutcome
+        self._showConfirm = showConfirm
         self.hasActiveSession = session != nil
     }
 
@@ -33,11 +38,8 @@ private struct ApplyButton: View {
         let canApply   = hasChanges && !isApplying
 
         Button {
-            guard hasActiveSession else { return }
-            Task {
-                await session.apply()
-                if session.lastOutcome != nil { showOutcome = true }
-            }
+            guard hasActiveSession, canApply else { return }
+            showConfirm = true
         } label: {
             if isApplying {
                 Label {
@@ -68,6 +70,7 @@ private struct ApplyButton: View {
 /// to know about multi-tab state.
 struct ContentView: View {
     @EnvironmentObject var workspace: Workspace
+    @State private var showConfirm = false
     @State private var showOutcome = false
 
     var body: some View {
@@ -90,20 +93,36 @@ struct ContentView: View {
             ToolbarItem(placement: .primaryAction) {
                 ApplyButton(
                     session: workspace.activeSession,
-                    showOutcome: $showOutcome
+                    showConfirm: $showConfirm
                 )
             }
         }
-        .alert(
-            "Rebase result",
-            isPresented: $showOutcome,
-            presenting: workspace.activeSession?.lastOutcome
-        ) { _ in
-            Button("OK") { }
-        } message: { outcome in
-            Text(outcome.kind == .success
-                 ? "Applied. Backup ref: \(outcome.backupRef)\n\n\(outcome.log)"
-                 : "Failed and rolled back from backup ref \(outcome.backupRef).\n\n\(outcome.log)")
+        .sheet(isPresented: $showConfirm) {
+            if let session = workspace.activeSession {
+                RebaseConfirmSheet(
+                    session: session,
+                    onApply: {
+                        showConfirm = false
+                        // Tiny delay so the confirm sheet's dismissal
+                        // animation doesn't race the result sheet's
+                        // presentation animation — without this the
+                        // result sheet sometimes never appears.
+                        Task {
+                            try? await Task.sleep(nanoseconds: 250_000_000)
+                            await session.apply()
+                            if session.lastOutcome != nil { showOutcome = true }
+                        }
+                    },
+                    onCancel: { showConfirm = false }
+                )
+            }
+        }
+        .sheet(isPresented: $showOutcome) {
+            if let outcome = workspace.activeSession?.lastOutcome {
+                RebaseResultSheet(outcome: outcome) {
+                    showOutcome = false
+                }
+            }
         }
     }
 

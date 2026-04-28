@@ -139,11 +139,84 @@ struct RebaseEngine {
         // 3. The cp trick: GIT_SEQUENCE_EDITOR is invoked as
         //    `<editor> <file>`, so `cp /our/todo.txt <file>` overwrites
         //    git's TODO with ours.
-        let env: [String: String] = [
+        var env: [String: String] = [
             "GIT_SEQUENCE_EDITOR": "/bin/cp '\(todoFile.path)'",
             "GIT_EDITOR": ":",
             "EDITOR": ":",
         ]
+
+        // 3a. Reword wiring. For any `reword` rows with a stored
+        //     `newMessage`, write each message to its own file in a
+        //     scratch directory keyed by full SHA, then point GIT_EDITOR
+        //     at a tiny helper script. The helper reads
+        //     `.git/rebase-merge/done`'s last line (the row git is
+        //     currently processing) and, if a file matching that SHA
+        //     exists in the scratch dir, copies its contents into git's
+        //     COMMIT_EDITMSG. One-file-per-SHA avoids escaping headaches
+        //     for multi-line messages with arbitrary characters.
+        //     Squash combined-message edits also pass through this
+        //     helper, but they'll miss the dir and exit cleanly,
+        //     leaving the default combined message intact.
+        let rewords: [(String, String)] = plan.compactMap { item in
+            guard item.verb == .reword,
+                  let new = item.newMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !new.isEmpty else { return nil }
+            return (item.commit.fullHash, new)
+        }
+        var rewordDir: URL? = nil
+        var rewordHelperFile: URL? = nil
+        if !rewords.isEmpty {
+            let dirURL = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("gitchop-reword-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: dirURL, withIntermediateDirectories: true)
+            rewordDir = dirURL
+            for (sha, message) in rewords {
+                // Trailing newline matches git's own COMMIT_EDITMSG
+                // convention so commit messages don't lose their final
+                // \n on round-trip.
+                let payload = message.hasSuffix("\n") ? message : message + "\n"
+                try payload.write(
+                    to: dirURL.appendingPathComponent(sha),
+                    atomically: true,
+                    encoding: .utf8
+                )
+            }
+
+            let helperURL = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("gitchop-reword-editor-\(UUID().uuidString).sh")
+            let script = """
+            #!/bin/bash
+            # GitChop reword helper: invoked by git as $EDITOR. Reads the
+            # in-flight rebase row's SHA from .git/rebase-merge/done and
+            # copies $GITCHOP_REWORD_DIR/<sha> into the commit-message
+            # file if present. Silently no-ops on misses (e.g. squash
+            # combined-message edits, or rows the user didn't reword).
+            msgfile="$1"
+            [ -n "$msgfile" ] || exit 0
+            gitdir=$(git rev-parse --git-dir 2>/dev/null || echo .git)
+            done="$gitdir/rebase-merge/done"
+            [ -f "$done" ] || exit 0
+            sha=$(awk 'NF { last=$2 } END { print last }' "$done")
+            [ -n "$sha" ] || exit 0
+            [ -n "$GITCHOP_REWORD_DIR" ] || exit 0
+            src="$GITCHOP_REWORD_DIR/$sha"
+            [ -f "$src" ] || exit 0
+            cp "$src" "$msgfile"
+            """
+            try script.write(to: helperURL, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: NSNumber(value: Int16(0o755))],
+                ofItemAtPath: helperURL.path
+            )
+            rewordHelperFile = helperURL
+
+            env["GIT_EDITOR"] = helperURL.path
+            env["GITCHOP_REWORD_DIR"] = dirURL.path
+        }
+        defer {
+            if let d = rewordDir { try? FileManager.default.removeItem(at: d) }
+            if let f = rewordHelperFile { try? FileManager.default.removeItem(at: f) }
+        }
 
         var combinedLog = ""
 

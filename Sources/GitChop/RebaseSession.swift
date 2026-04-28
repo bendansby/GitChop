@@ -39,6 +39,12 @@ final class RebaseSession: ObservableObject, Identifiable {
     /// sheet calls back with Save or Cancel.
     @Published var splitSheetCommitID: String?
 
+    /// When set, a RewordSheet is open for this PlanItem's id. Toggled
+    /// by `setVerb` (when the user picks .reword) and by `openRewordSheet`
+    /// (when re-opening for an already-reworded row); cleared on
+    /// Save/Cancel.
+    @Published var rewordSheetCommitID: String?
+
     /// True when there's a plan loaded and at least one row has a non-pick
     /// verb or has been reordered. Drives the Apply button's enabled state
     /// — a no-op rebase is harmless but pointless.
@@ -144,6 +150,12 @@ final class RebaseSession: ObservableObject, Identifiable {
         if previousVerb == .edit && verb != .edit {
             plan[idx].editPlan = nil
         }
+        // Same idea for reword: leaving the verb discards the pending
+        // new message so the row reverts to displaying the original.
+        if previousVerb == .reword && verb != .reword {
+            plan[idx].newMessage = nil
+            if rewordSheetCommitID == id { rewordSheetCommitID = nil }
+        }
         recomputeChangedFlag()
         // Switching TO edit auto-opens the split sheet so the user
         // doesn't have to discover a separate action — the verb itself
@@ -151,6 +163,41 @@ final class RebaseSession: ObservableObject, Identifiable {
         if verb == .edit && previousVerb != .edit {
             splitSheetCommitID = id
         }
+        // Same idea for reword: open the reword sheet so the user can
+        // type the new subject immediately.
+        if verb == .reword && previousVerb != .reword {
+            rewordSheetCommitID = id
+        }
+    }
+
+    /// Re-open the reword sheet for an already-reworded row. Bound to
+    /// the chip menu's "Edit message…" entry.
+    func openRewordSheet(for id: String) {
+        guard let item = plan.first(where: { $0.id == id }), item.verb == .reword else { return }
+        rewordSheetCommitID = id
+    }
+
+    /// Commit the new full message from the sheet. Empty / unchanged
+    /// from the passed-in original → revert reword state and drop verb
+    /// back to .pick; otherwise promote verb to .reword and store the
+    /// new message verbatim.
+    func saveReword(_ id: String, newMessage: String, original: String) {
+        guard let idx = plan.firstIndex(where: { $0.id == id }) else { return }
+        let trimmedNew = newMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedOriginal = original.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedNew.isEmpty || trimmedNew == trimmedOriginal {
+            plan[idx].newMessage = nil
+            if plan[idx].verb == .reword { plan[idx].verb = .pick }
+        } else {
+            plan[idx].newMessage = trimmedNew
+            plan[idx].verb = .reword
+        }
+        rewordSheetCommitID = nil
+        recomputeChangedFlag()
+    }
+
+    func cancelReword() {
+        rewordSheetCommitID = nil
     }
 
     /// Re-open the split sheet for an already-edit row. Bound to a

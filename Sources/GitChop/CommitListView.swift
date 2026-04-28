@@ -20,8 +20,8 @@ struct CommitListView: View {
                     ForEach(Array(session.plan.enumerated()), id: \.element.id) { idx, item in
                         CommitRow(
                             item: item,
-                            attachedToAbove: PlanInspector.attachedToAbove(at: idx, in: session.plan),
-                            absorbedCount:   PlanInspector.absorbedCount(at: idx, in: session.plan)
+                            absorbedCount: PlanInspector.absorbedCount(at: idx, in: session.plan),
+                            isSelected: session.selectedID == item.id
                         )
                         .tag(item.id)
                     }
@@ -146,8 +146,8 @@ struct CommitListView: View {
 
 private struct CommitRow: View {
     let item: PlanItem
-    let attachedToAbove: Bool   // squash/fixup with a valid parent above
     let absorbedCount: Int      // for picks: how many squash/fixup rows fold into me
+    let isSelected: Bool        // whether this row is the active selection (for icon contrast)
 
     @EnvironmentObject var session: RebaseSession
 
@@ -173,14 +173,12 @@ private struct CommitRow: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 60, alignment: .leading)
 
-            Text(item.commit.subject)
+            Text(item.displaySubject)
                 .lineLimit(1)
                 .font(.body)
-                .foregroundStyle(item.verb == .drop ? AnyShapeStyle(Color.secondary) : AnyShapeStyle(.primary))
+                .foregroundStyle(subjectColor)
                 .strikethrough(item.verb == .drop)
-
             Spacer(minLength: 8)
-
             Text(item.commit.author)
                 .font(.caption)
                 .foregroundStyle(.tertiary)
@@ -190,6 +188,17 @@ private struct CommitRow: View {
         .opacity(item.verb == .drop ? 0.55 : 1.0)
     }
 
+    private var subjectColor: AnyShapeStyle {
+        if item.verb == .drop { return AnyShapeStyle(Color.secondary) }
+        // On a selected row, custom verb-tinted text would clash with
+        // the system selection background — fall back to white.
+        if isSelected && item.verb == .reword && item.newMessage != nil {
+            return AnyShapeStyle(Color.white)
+        }
+        if item.verb == .reword && item.newMessage != nil { return AnyShapeStyle(Verb.reword.color) }
+        return AnyShapeStyle(.primary)
+    }
+
     /// One column that shows either "I merge up into the row above"
     /// (squash/fixup) or "N rows merge into me" (pick), in the same
     /// horizontal slot so the layout stays aligned regardless of which
@@ -197,15 +206,14 @@ private struct CommitRow: View {
     @ViewBuilder
     private var relationshipIndicator: some View {
         ZStack {
-            if attachedToAbove {
-                Image(systemName: "arrow.turn.left.up")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(item.verb.color)
-                    .help("Merges into the commit above")
-            } else if absorbedCount > 0 {
+            // Attach-arrow used to live here for squash/fixup rows but
+            // duplicated the chip's ↑ / ⤴ glyph — same row, same idea,
+            // twice. Only the absorbed-count badge is kept: it's unique
+            // info the chip can't carry.
+            if absorbedCount > 0 {
                 Text("+\(absorbedCount)")
                     .font(.system(.caption2, design: .monospaced).bold())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(isSelected ? AnyShapeStyle(Color.white) : AnyShapeStyle(.secondary))
                     .help("\(absorbedCount) commit\(absorbedCount == 1 ? "" : "s") below will merge into this one")
             }
         }
@@ -214,20 +222,55 @@ private struct CommitRow: View {
 
     private var verbChip: some View {
         Menu {
-            ForEach(Verb.allCases) { verb in
-                Button {
-                    session.setVerb(of: item.id, to: verb)
-                } label: {
-                    Label("\(verb.rawValue.capitalized) — \(verb.explanation)", systemImage: verb == item.verb ? "checkmark" : "")
+            // Picker(.inline) renders as a proper macOS menu section with
+            // radio-style selection (filled circle on the active item),
+            // which reads cleaner than a list of Buttons each with their
+            // own checkmark prefix. The section header doubles as a
+            // category label so the action items below feel separate.
+            Picker(
+                "Verb",
+                selection: Binding(
+                    get: { item.verb },
+                    set: { session.setVerb(of: item.id, to: $0) }
+                )
+            ) {
+                ForEach(Verb.allCases) { verb in
+                    // Glyph + name + explanation. The explanation is the
+                    // discoverability win — first-time users don't have
+                    // to remember what each verb does, and even regulars
+                    // benefit from the squash-vs-fixup distinction
+                    // spelled out at point of use.
+                    Text("\(verb.glyph)  \(verb.rawValue.capitalized) — \(verb.explanation)")
+                        .tag(verb)
                 }
             }
+            .pickerStyle(.inline)
+
             // For already-edit rows, expose a way to re-open the
             // split sheet without first toggling away and back. The
             // verb itself doesn't change.
             if item.verb == .edit {
                 Divider()
-                Button(item.editPlan == nil ? "Configure split…" : "Edit split…") {
+                Button {
                     session.openSplitSheet(for: item.id)
+                } label: {
+                    Label(
+                        item.editPlan == nil ? "Configure split…" : "Edit split…",
+                        systemImage: "rectangle.split.3x1"
+                    )
+                }
+            }
+            // Same for reword: re-open the sheet without toggling the
+            // verb away and back.
+            if item.verb == .reword {
+                Divider()
+                Button {
+                    session.openRewordSheet(for: item.id)
+                } label: {
+                    Label(
+                        item.newMessage == nil ? "Edit message…" : "Edit message again…",
+                        systemImage: "pencil.line"
+                    )
                 }
             }
         } label: {
@@ -256,3 +299,4 @@ private struct CommitRow: View {
         .fixedSize()
     }
 }
+

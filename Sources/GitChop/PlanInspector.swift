@@ -30,8 +30,8 @@ enum PlanInspector {
         var i = idx - 1
         while i >= 0 {
             switch plan[i].verb {
-            case .pick, .edit, .squash, .fixup: return true
-            case .drop:                         i -= 1
+            case .pick, .reword, .edit, .squash, .fixup: return true
+            case .drop:                                  i -= 1
             }
         }
         return false
@@ -44,15 +44,16 @@ enum PlanInspector {
     /// into them.
     static func absorbedCount(at idx: Int, in plan: [PlanItem]) -> Int {
         guard idx >= 0 && idx < plan.count else { return 0 }
-        guard plan[idx].verb == .pick || plan[idx].verb == .edit else { return 0 }
+        let v = plan[idx].verb
+        guard v == .pick || v == .edit || v == .reword else { return 0 }
 
         var count = 0
         var i = idx + 1
         while i < plan.count {
             switch plan[i].verb {
-            case .squash, .fixup: count += 1
-            case .pick, .edit:    return count
-            case .drop:           break    // skip, keep walking
+            case .squash, .fixup:        count += 1
+            case .pick, .edit, .reword:  return count
+            case .drop:                  break    // skip, keep walking
             }
             i += 1
         }

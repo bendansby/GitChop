@@ -8,6 +8,7 @@ import SwiftUI
 /// terminal.
 enum Verb: String, CaseIterable, Identifiable {
     case pick
+    case reword
     case edit
     case squash
     case fixup
@@ -19,6 +20,7 @@ enum Verb: String, CaseIterable, Identifiable {
     var glyph: String {
         switch self {
         case .pick:   return "•"
+        case .reword: return "✎"
         case .edit:   return "✂"     // chop — fits the app theme + signals action
         case .squash: return "↑"
         case .fixup:  return "⤴"
@@ -30,6 +32,7 @@ enum Verb: String, CaseIterable, Identifiable {
     var explanation: String {
         switch self {
         case .pick:   return "Keep this commit as-is"
+        case .reword: return "Edit this commit's message"
         case .edit:   return "Split this commit into multiple smaller commits"
         case .squash: return "Combine into the previous commit, keeping both messages"
         case .fixup:  return "Combine into the previous commit, dropping this message"
@@ -40,10 +43,24 @@ enum Verb: String, CaseIterable, Identifiable {
     var color: Color {
         switch self {
         case .pick:   return Color(.secondaryLabelColor)
+        case .reword: return Color(red: 0.85, green: 0.55, blue: 0.10)   // amber
         case .edit:   return Color(red: 0.55, green: 0.30, blue: 0.85)   // violet
         case .squash: return Color(red: 0.10, green: 0.41, blue: 0.84)
         case .fixup:  return Color(red: 0.18, green: 0.55, blue: 0.34)
         case .drop:   return Color(red: 0.85, green: 0.22, blue: 0.22)
+        }
+    }
+
+    /// SF Symbol name for the verb-chip menu. Mirrors the chip's text
+    /// glyph but renders crisper as a native menu icon.
+    var symbolName: String {
+        switch self {
+        case .pick:   return "circle"
+        case .reword: return "pencil"
+        case .edit:   return "scissors"
+        case .squash: return "arrow.up"
+        case .fixup:  return "arrow.up.right"
+        case .drop:   return "xmark"
         }
     }
 }
@@ -92,8 +109,23 @@ struct PlanItem: Identifiable, Hashable {
     let commit: Commit
     var verb: Verb
     var editPlan: EditPlan? = nil
+    /// New full commit message when the user has reworded this commit
+    /// (subject + optional body, separated by a blank line per git
+    /// convention). Nil means "keep the original message." Only
+    /// meaningful when `verb == .reword`; `setVerb` clears this when
+    /// leaving the reword verb.
+    var newMessage: String? = nil
 
     var id: String { commit.fullHash }
+
+    /// First line of the new message if reworded, otherwise the commit's
+    /// original subject. Used by the row + confirm sheet preview.
+    var displaySubject: String {
+        if let m = newMessage {
+            return String(m.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first ?? "")
+        }
+        return commit.subject
+    }
 }
 
 /// Result returned from a rebase attempt — drives the post-Apply alert.

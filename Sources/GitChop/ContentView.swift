@@ -98,6 +98,32 @@ private struct SplitSheetHost: ViewModifier {
     }
 }
 
+/// Hosts the reword sheet for the active session. Same observer
+/// pattern as `SplitSheetHost` for the same reason.
+private struct RewordSheetHost: ViewModifier {
+    @ObservedObject var session: RebaseSession
+
+    func body(content: Content) -> some View {
+        content.sheet(
+            isPresented: Binding(
+                get: { session.rewordSheetCommitID != nil },
+                set: { if !$0 { session.rewordSheetCommitID = nil } }
+            )
+        ) {
+            if let id = session.rewordSheetCommitID {
+                RewordSheet(
+                    session: session,
+                    planItemID: id,
+                    onSave: { newMsg, original in
+                        session.saveReword(id, newMessage: newMsg, original: original)
+                    },
+                    onCancel: { session.cancelReword() }
+                )
+            }
+        }
+    }
+}
+
 /// Top-level layout. Reads the workspace, renders the tab strip, and
 /// pipes the active session into the inner views so they don't have
 /// to know about multi-tab state.
@@ -177,6 +203,7 @@ struct ContentView: View {
         }
         .environmentObject(session)
         .modifier(SplitSheetHost(session: session))
+        .modifier(RewordSheetHost(session: session))
         // Tag with session.id so SwiftUI rebuilds the subtree when the
         // active tab changes, instead of re-using the same view tree
         // and confusing onAppear/state.

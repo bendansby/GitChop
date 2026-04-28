@@ -41,6 +41,9 @@ struct RebaseConfirmSheet: View {
     private var squashCount: Int { session.plan.filter { $0.verb == .squash }.count }
     private var fixupCount:  Int { session.plan.filter { $0.verb == .fixup  }.count }
     private var pickCount:   Int { session.plan.filter { $0.verb == .pick   }.count }
+    private var rewordCount: Int {
+        session.plan.filter { $0.verb == .reword && $0.newMessage != nil }.count
+    }
 
     /// Net commit count after Apply: starts at the plan size, drops
     /// removed entries, drops squash/fixup entries (they collapse into
@@ -112,6 +115,9 @@ struct RebaseConfirmSheet: View {
         if fixupCount > 0 {
             lines.append("\(fixupCount) commit\(fixupCount == 1 ? " will be fixed up into the one above it (this commit's message discarded)." : "s will be fixed up into the one above each of them (their messages discarded).")")
         }
+        if rewordCount > 0 {
+            lines.append("\(rewordCount) commit\(rewordCount == 1 ? "'s message will be rewritten." : "s' messages will be rewritten.")")
+        }
         return lines
     }
 
@@ -127,8 +133,7 @@ struct RebaseConfirmSheet: View {
                     ForEach(Array(session.plan.enumerated()), id: \.element.id) { idx, item in
                         previewRow(
                             item,
-                            attachedToAbove: PlanInspector.attachedToAbove(at: idx, in: session.plan),
-                            absorbedCount:   PlanInspector.absorbedCount(at: idx, in: session.plan)
+                            absorbedCount: PlanInspector.absorbedCount(at: idx, in: session.plan)
                         )
                     }
                 }
@@ -147,18 +152,14 @@ struct RebaseConfirmSheet: View {
 
     private func previewRow(
         _ item: PlanItem,
-        attachedToAbove: Bool,
         absorbedCount: Int
     ) -> some View {
         HStack(spacing: 10) {
-            // Same single-column relationship indicator pattern as the
-            // main commit list — keeps the two views visually aligned.
+            // Same single-column relationship indicator as the main
+            // commit list — only the +N badge, since the chip's glyph
+            // already conveys "I attach above" for squash/fixup.
             ZStack {
-                if attachedToAbove {
-                    Image(systemName: "arrow.turn.left.up")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(item.verb.color)
-                } else if absorbedCount > 0 {
+                if absorbedCount > 0 {
                     Text("+\(absorbedCount)")
                         .font(.system(.caption2, design: .monospaced).bold())
                         .foregroundStyle(.secondary)
@@ -178,14 +179,20 @@ struct RebaseConfirmSheet: View {
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(.secondary)
                 .frame(width: 60, alignment: .leading)
-            Text(item.commit.subject)
+            Text(item.displaySubject)
                 .lineLimit(1)
                 .font(.callout)
-                .foregroundStyle(item.verb == .drop ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.primary))
+                .foregroundStyle(previewSubjectColor(item))
                 .strikethrough(item.verb == .drop)
             Spacer()
         }
         .padding(.vertical, 3)
+    }
+
+    private func previewSubjectColor(_ item: PlanItem) -> AnyShapeStyle {
+        if item.verb == .drop { return AnyShapeStyle(.tertiary) }
+        if item.verb == .reword && item.newMessage != nil { return AnyShapeStyle(Verb.reword.color) }
+        return AnyShapeStyle(.primary)
     }
 
     // MARK: - Backup notice

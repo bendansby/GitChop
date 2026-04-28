@@ -3,12 +3,15 @@
 A Mac-native `git rebase -i` that doesn't drop you into a TODO file.
 
 Pitch: *"I made `git rebase -i` not suck."* The killer differentiator vs.
-Tower / Fork / GitHub Desktop is **split-commit-in-window** (the `edit`
-verb done as a hunk-staging UI rather than a `--continue` dance). v0.1
-ships the rest of the rebase verbs without split — split lands in v0.2.
+Tower / Fork / GitHub Desktop is **split-commit-in-window** — the `edit`
+verb done as a hunk-staging UI rather than a `--continue` dance. Magit
+has had this on Emacs for 15 years; nothing else on macOS does.
 
-Currently at **0.1.0 (preview)**. macOS 14+. Bundle ID
+Currently at **0.2 (preview)**. macOS 14+. Bundle ID
 `com.bendansby.GitChop`. Not yet shipped publicly; no Sparkle feed yet.
+
+If you want to know *why* a thing is the way it is, read `DECISIONS.md`.
+If you want to know *what's next*, read `BACKLOG.md`.
 
 ---
 
@@ -28,22 +31,23 @@ bash "Sample Project/init.sh"
 The sample is a small bash CLI project (`tabby` — CSV/Markdown/JSON
 table converter) with 26 commits across three authors, two merged
 feature/bugfix branches, and a deliberate 12-commit "local WIP" tail
-that exercises every rebase verb in v0.1:
+that exercises every rebase verb:
 
 - **drop**     "WIP: starting TOML output (probably won't ship)"
 - **fixup**    "Fix JSON output: don't double-escape" → into "Start JSON output support"
 - **squash**   "Add CSV→JSON output test" → with "Start JSON output support"
-- **reorder**  "Fix CI: install jq…" should land near the JSON feature commit, not 8 commits later
+- **reorder**  "Fix CI: install jq…" should land near the JSON feature commit
+- **edit**     pick any non-trivial commit and split it across two buckets
 
-The init script ends by printing the graph and a guided practice list
-so you can jump straight in. Re-running it deletes and regenerates the
-sample, so it's safe to chop, mess up, and reset.
+The init script ends by printing the graph and a guided practice list.
+Re-running it deletes and regenerates the sample, so it's safe to chop,
+mess up, and reset.
 
 `Sample Project/repo/` is its own self-contained git repo (gitignored
 by GitChop's outer repo). That's why opening it in GitChop shows the
 sample's history rather than GitChop's own — `git rev-parse
---show-toplevel` stops at the nearest `.git` directory, which is the
-sample's, not the outer one.
+--show-toplevel` stops at the nearest `.git`, which is the sample's,
+not the outer one.
 
 ---
 
@@ -54,49 +58,97 @@ GitChop/
   Package.swift                — SwiftPM, single executable target
   GitChop.entitlements         — empty; intentionally NOT sandboxed
                                  (sandbox blocks subprocess + arbitrary FS)
+  Icon.png                     — generated from scripts/render-icon.py
   Resources/
     Info.plist                 — bundle identity, version
   Sources/GitChop/
-    GitChopApp.swift           — @main scene, Open-Repo command
-    ContentView.swift          — split layout, toolbar, alert
-    CommitListView.swift       — drag-reorder list, verb chips
-    DiffPaneView.swift         — `git show` pane
-    RebaseSession.swift        — top-level @ObservableObject
-    RebaseEngine.swift         — load + apply (the rebase itself)
+    GitChopApp.swift           — @main scene, Open-Repo / Close-Tab commands
+    Workspace.swift            — top-level state: N RebaseSessions + persistence
+    RebaseSession.swift        — per-repo: plan, diff, status, isApplying
+    RebaseEngine.swift         — load + apply + pause-loop + split execution
     GitRunner.swift            — Process wrapper around /usr/bin/git
-    Models.swift               — Commit, Verb, PlanItem, RebaseOutcome
+                                 (run, runWithStdin)
+    HunkParser.swift           — unified-diff → ParsedDiff (files + hunks),
+                                 + reassemble back into a unified diff
+    PlanInspector.swift        — squash/fixup attach-relationship math
+    Models.swift               — Verb, Commit, PlanItem, EditPlan,
+                                 RebaseOutcome
+    ContentView.swift          — top-level layout, toolbar, sheet plumbing
+    TabStripView.swift         — Finder-style tab strip (whole pill is hit area)
+    CommitListView.swift       — drag-reorder, verb chips, attach indicators
+    DiffPaneView.swift         — `git show` pane: word-wrap + line numbers,
+                                 structural color
+    RebaseConfirmSheet.swift   — pre-Apply confirmation, plan preview
+    RebaseResultSheet.swift    — post-Apply result, copyable backup ref
+    SplitCommitSheet.swift     — split-commit hunk-assignment UI
   Sample Project/
-    init.sh                    — generates a fresh demo repo on demand
+    init.sh                    — generates a fresh 26-commit demo repo
+    repo/                      — generated, gitignored
   scripts/
-    build-app.sh               — local dev: build, ad-hoc sign, install
+    build-app.sh               — local dev: build, ad-hoc sign, install,
+                                 lsregister, retry-launch until pgrep
+    render-icon.py             — regenerates Icon.png (Pillow)
   release-notes/
     _layout.html               — Sparkle-WebView-friendly note layout
     0.1.0.html                 — preview release notes (body fragment)
   ORIENTATION.md               — this file
+  DECISIONS.md                 — why-we-did-it-this-way log
+  BACKLOG.md                   — v0.3 and beyond
 ```
 
 ---
 
-## How Apply actually works
+## Apply pipeline (incl. split execution)
 
 The cute trick: `GIT_SEQUENCE_EDITOR` is invoked by git as
-`<editor> <todo-file>`. We set it to `cp '/path/to/our/todo.txt'` so
-that the invocation becomes `cp /our/todo.txt <git's-todo-file>`,
-which overwrites git's TODO with ours. Result: a normal `git rebase -i`
+`<editor> <todo-file>`. Setting it to `cp '/path/to/our/todo.txt'`
+makes the invocation `cp /our/todo.txt <git's-todo-file>`, which
+overwrites git's TODO with ours. Result: a normal `git rebase -i`
 runs to completion using our list, no editor pop-ups, no manual
-`--continue`.
+TODO editing.
 
 Sequence in `RebaseEngine.apply`:
 
 1. Write a backup ref `refs/gitchop-backup/<timestamp>` pointing at
-   current HEAD. This is the safety net.
-2. Build a TODO file from the user's plan: `<verb> <full-sha> <subject>`,
-   one per line. Order matches the user's reordered list.
+   current HEAD. Safety net for everything that follows.
+2. Build a TODO file from the user's plan: `<verb> <full-sha>
+   <subject>`, one per line. Order matches the user's reordered list.
 3. `git rebase -i <base>` with `GIT_SEQUENCE_EDITOR=cp '<our-todo>'`
-   and `GIT_EDITOR=:` (so squash's combined-message prompt accepts the
-   default; v0.2 will plug a real editor for reword).
-4. On non-zero exit: `git rebase --abort` then `git update-ref HEAD <backup>`
-   plus `git reset --hard HEAD`. We never leave the user mid-rebase.
+   and `GIT_EDITOR=:` (so squash's combined-message prompt accepts
+   the default; reword is v0.3).
+4. **Pause loop.** git rebase exits with code 0 when it pauses on
+   `edit` (or `break`), so exit code alone doesn't tell us if we're
+   done. Poll `.git/rebase-merge/` and `.git/rebase-merge/stopped-sha`:
+   while a rebase is in flight, look up the stopped commit in the
+   plan; if it has an `EditPlan`, run `runSplit()`; either way
+   `git rebase --continue` and re-check.
+5. **Final check.** Success requires `.git/rebase-merge/` to be gone.
+   If a continue failed (conflict, bad split apply), the caller in
+   `RebaseSession.apply` runs `git rebase --abort` and `git update-ref
+   HEAD <backup>` + `git reset --hard HEAD`. We never leave the user
+   mid-rebase silently.
+
+### Split execution (`runSplit`)
+
+When git pauses on an edit row that has an `EditPlan`:
+
+1. `git reset HEAD^` — uncommit but keep working-tree state
+2. `git diff HEAD` — capture the original commit's full delta
+3. `HunkParser.parse()` the diff
+4. For each bucket, in order:
+   - `HunkParser.reassemble()` only that bucket's hunk IDs
+   - `git apply --cached --recount` (stdin = the reassembled patch)
+   - `git commit -m "<bucket subject>"`
+5. Belt-and-suspenders: any leftover staged/unstaged changes get
+   `git add -A` + commit under `<original> (leftover)`. The sheet
+   validates "all hunks assigned" before save, so this is for cases
+   where the diff drifted between sheet-open and apply-time.
+6. Returns to the pause loop, which then `git rebase --continue`s.
+
+Hunk IDs are content-derived: `"<file>::<hunk-header>::<first-body-line>"`.
+This is what lets the user's bucket assignments survive close-and-reopen
+of the split sheet AND match between sheet-time parsing and apply-time
+parsing (which happens against `git diff HEAD` after the reset).
 
 ---
 
@@ -104,40 +156,105 @@ Sequence in `RebaseEngine.apply`:
 
 - **Not sandboxed.** Sandbox blocks subprocess execution; we have to
   shell out to `git`. `GitChop.entitlements` is empty on purpose.
-- **Subjects in the TODO are display-only.** Git ignores anything
-  past the SHA on a TODO line — so we put the subject there for
-  human-readability when the user inspects the temp file, but
-  rewriting the subject in the UI does NOT rename the commit. Reword
-  is a separate `git commit --amend -m` path that comes in v0.2.
+- **Subjects in the TODO are display-only.** Git ignores anything past
+  the SHA on a TODO line — we put the subject there for human-readable
+  diffs when inspecting the temp file. Rewriting the subject in the
+  UI does NOT rename the commit (that's reword, v0.3).
 - **`drop` is a real rebase verb in modern git** (≥ 2.4). No need to
   filter the entry out of the TODO; git understands `drop <sha>` and
   skips it.
-- **`squash` and `fixup` need a preceding `pick`.** If the user's
-  plan starts with squash/fixup, git errors. We don't pre-validate;
-  we let git's error message surface in the result alert and rely on
-  the backup ref to recover. Pre-validation is on the v0.2 list.
-- **Most-recent commit is bottom of the list, oldest is top.** Matches
-  `git rebase -i`'s native TODO order (which surprises GUI users used
-  to seeing newest-first). Worth keeping.
-- **iCloud File Provider xattrs** are the same gotcha as the other
-  apps in this workspace — we stage the .app to /tmp before signing.
-- **`drop` rendering.** The row's subject gets a strikethrough and the
-  whole row dims. No verb-chip color change beyond the chip's own red.
+- **`squash` and `fixup` need a preceding `pick` or `edit` or another
+  squash/fixup.** If the user's plan starts with squash/fixup or has
+  a chain that doesn't trace back to a pick/edit, git errors at apply
+  time. We don't pre-validate; the result sheet surfaces git's error
+  and the rebase rolls back.
+- **Most-recent commit is at the BOTTOM of the list.** Matches
+  `git rebase -i`'s native TODO order. Surprises GUI users used to
+  reverse-chronological. Worth keeping — the user's mental model
+  matches what git is about to do.
+- **iCloud File Provider xattrs.** Same gotcha as the other apps in
+  this workspace — we stage the .app to /tmp before signing.
+- **Edit acts like pick for attach-relationship math.** A squash/fixup
+  below an edit row chains into the result of the split (last bucket).
+  An edit row absorbs squash/fixups below it — they fold into the
+  last split commit at apply time.
+- **The toolbar Apply button needs its own observer.** ContentView
+  observes Workspace; Workspace doesn't republish when a session's
+  @Published properties change. So `ApplyButton` is its own
+  `@ObservedObject`-bound subview. Without that the button's state
+  (hasChanges, isApplying) lags behind the user's edits.
+- **Two sheets in sequence need a delay.** When the confirm sheet's
+  Apply runs, we dismiss it, sleep 250 ms, then run the rebase and
+  pop the result sheet. Without the sleep the dismiss/present
+  animations race and the result sheet sometimes never appears.
+- **Hunk IDs are content-derived, not UUIDs.** UUIDs would change
+  on every parse; bucket assignments would lose their referent.
+  Stable string IDs survive close-and-reopen of the split sheet
+  AND survive the sheet-time → apply-time re-parse.
+- **`Image.paste(layer, mask)` REPLACES alpha.** Caused the icon's
+  colored dots to render as washed-out white rectangles. The fix is
+  `Image.composite(layer, blank, mask)` to clip first, then
+  `alpha_composite()` onto the destination.
 
 ---
 
-## Where this is going (v0.2 backlog)
+## Tab strip + persistence
 
-- **Reword inline.** Click subject to edit; chips auto-promote to `reword`
-  and we generate a per-commit message map that a small helper editor
-  uses when git invokes GIT_EDITOR.
-- **Split-commit in window** (the killer feature). Mark `edit` on a row;
-  click a button to open a hunk view; partition hunks into N buckets
-  with messages; the row expands into N rows in the plan.
-- **Conflict pause.** Detect `.git/rebase-merge/` after a failed apply,
-  surface "Resolve in mergetool / Skip / Abort" options instead of
-  auto-rolling back.
-- **Custom range.** Pick the base commit (HEAD~N picker, or click a
-  commit to "base from here").
-- **Pre-validate plan.** Refuse to Apply if `squash`/`fixup` precedes a
-  `pick`, with a clear message instead of letting git complain.
+Multi-repo via tabs at the top of the window. `Workspace.swift`
+holds `[RebaseSession]` + `activeSessionID`. Open paths persist as
+absolute paths under UserDefaults key `GitChopOpenRepos.v1` and are
+restored on launch (paths that no longer resolve to a directory get
+silently dropped). Opening a repo that's already in some tab just
+switches to that tab.
+
+`TabStripView` renders Finder-style pills with the whole tab as the
+hit target (an early version had only the inner Text as the click
+target — clicks on padding fell through). Close X is overlaid on the
+trailing edge with reserved width so tabs don't shift on hover.
+
+---
+
+## Auto-rebuild dev loop
+
+`.claude/settings.local.json` at the workspace root has a `PostToolUse`
+hook that fires on `Edit|Write|MultiEdit`. Hook body:
+`.claude/hooks/gitchop-build.sh`. The hook:
+- filters by file path containing `Mac Apps/GitChop/Sources/`
+- guards with an mkdir-lock at `/tmp/gitchop-build.lock`
+- runs `bash scripts/build-app.sh` from the GitChop directory
+- logs to `/tmp/gitchop-build.log`
+
+`build-app.sh` itself does `pkill -x GitChop`, ditto-installs to
+`/Applications/GitChop.app`, calls `lsregister -f` to force LaunchServices
+to re-index, then `open` + `pgrep` retry loop until the app is actually
+running (LSOpenURLsWithCompletionHandler -600 is racy after a fresh
+install; this gets around it).
+
+**Watcher caveat:** Claude Code's settings watcher only watches
+`.claude/` directories that existed at session start. If you create
+`.claude/` mid-session, the hook is written but won't fire until you
+open `/hooks` or restart. Once it does fire, every edit triggers a
+rebuild within ~10 seconds.
+
+---
+
+## When you finish a task
+
+1. Verify the build is clean:
+   `bash scripts/build-app.sh 2>&1 | grep -E "error:|warning: |Build complete"`
+2. For UI work: actually click through the change in the running app.
+3. Commit only when asked. Message style: terse, imperative, body
+   describes the *why*.
+4. If a feature crosses multiple files, one squashed commit beats
+   five micro-commits — easier to revert as a unit.
+
+## When in doubt
+
+- Read `DECISIONS.md` before second-guessing an established choice.
+- Read `BACKLOG.md` before starting something new — it might be
+  there with context already.
+- The git history has good commit messages — `git log -p
+  Sources/GitChop/<file>.swift` is faster than asking why a thing
+  is the way it is.
+- The sample repo at `Sample Project/repo/` is regeneratable from
+  `init.sh`. Don't touch it manually; edit `init.sh` and re-run.

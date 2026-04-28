@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# Build a signed GitChop.app bundle for local development.
+#
+# v0.1 only does the local-dev path: build with swift-pm, wrap in a
+# .app, ad-hoc sign, install to /Applications. Notarize/DMG/appcast
+# come in scripts/release.sh once the app is past MVP.
+#
+# Usage:
+#   scripts/build-app.sh                    # build, ad-hoc sign, install + launch
+#   INSTALL=0 scripts/build-app.sh          # build to build/GitChop.app, don't install
+#   SIGN_IDENTITY="Developer ID Application: Benjamin Dansby (8CYGCS6F34)" scripts/build-app.sh
+
+set -euo pipefail
+cd "$(dirname "$0")/.."
+ROOT="$(pwd)"
+
+APP_NAME="GitChop"
+BUNDLE_ID="com.bendansby.GitChop"
+SIGN_IDENTITY="${SIGN_IDENTITY:--}"   # ad-hoc by default
+INSTALL="${INSTALL:-1}"
+
+echo "==> Building release binary (universal)"
+swift build -c release --arch arm64 --arch x86_64
+
+BUILD_DIR=".build/apple/Products/Release"
+BIN="$BUILD_DIR/$APP_NAME"
+[[ -f "$BIN" ]] || { echo "!! Expected $BIN after swift build" >&2; exit 1; }
+
+# Stage in /tmp so iCloud File Provider xattrs don't poison codesign.
+STAGE="$(mktemp -d -t GitChop-build)"
+trap 'rm -rf "$STAGE"' EXIT
+APP_DIR="$STAGE/$APP_NAME.app"
+CONTENTS="$APP_DIR/Contents"
+mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
+
+ditto --noextattr --noacl "$BIN" "$CONTENTS/MacOS/$APP_NAME"
+ditto --noextattr --noacl "Resources/Info.plist" "$CONTENTS/Info.plist"
+
+# AppIcon: build/AppIcon.icns from Icon.png if present (regenerated when
+# the PNG is newer). Skipped silently if no source PNG yet — the app
+# will just show the Mac generic icon, fine for MVP.
+if [[ -f Icon.png ]]; then
+    if [[ ! -f build/AppIcon.icns || Icon.png -nt build/AppIcon.icns ]]; then
+        echo "==> Rebuilding AppIcon.icns from Icon.png"
+        mkdir -p build
+        ICONSET=build/AppIcon.iconset
+        rm -rf "$ICONSET"
+        mkdir -p "$ICONSET"
+        sips -z 16 16     Icon.png --out "$ICONSET/icon_16x16.png"     >/dev/null
+        sips -z 32 32     Icon.png --out "$ICONSET/icon_16x16@2x.png"  >/dev/null
+        sips -z 32 32     Icon.png --out "$ICONSET/icon_32x32.png"     >/dev/null
+        sips -z 64 64     Icon.png --out "$ICONSET/icon_32x32@2x.png"  >/dev/null
+        sips -z 128 128   Icon.png --out "$ICONSET/icon_128x128.png"   >/dev/null
+        sips -z 256 256   Icon.png --out "$ICONSET/icon_128x128@2x.png">/dev/null
+        sips -z 256 256   Icon.png --out "$ICONSET/icon_256x256.png"   >/dev/null
+        sips -z 512 512   Icon.png --out "$ICONSET/icon_256x256@2x.png">/dev/null
+        sips -z 512 512   Icon.png --out "$ICONSET/icon_512x512.png"   >/dev/null
+        cp Icon.png "$ICONSET/icon_512x512@2x.png"
+        iconutil -c icns "$ICONSET" -o build/AppIcon.icns
+    fi
+    cp build/AppIcon.icns "$CONTENTS/Resources/AppIcon.icns"
+    /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile AppIcon" "$CONTENTS/Info.plist" 2>/dev/null \
+        || /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string AppIcon" "$CONTENTS/Info.plist"
+fi
+
+xattr -cr "$APP_DIR"
+
+echo "==> Signing (identity: $SIGN_IDENTITY)"
+SIGN_ARGS=(--force --options runtime --timestamp)
+if [[ -f GitChop.entitlements ]]; then
+    SIGN_ARGS+=(--entitlements GitChop.entitlements)
+fi
+codesign "${SIGN_ARGS[@]}" --sign "$SIGN_IDENTITY" "$APP_DIR"
+
+echo "==> Verifying signature"
+codesign --verify --deep --strict --verbose=2 "$APP_DIR" || true
+
+if [[ "$INSTALL" == "1" ]]; then
+    DEST="/Applications/$APP_NAME.app"
+    echo "==> Installing to $DEST"
+    pkill -x "$APP_NAME" 2>/dev/null || true
+    rm -rf "$DEST"
+    ditto --noextattr --noacl "$APP_DIR" "$DEST"
+    open "$DEST"
+    echo
+    echo "Done: $DEST"
+else
+    OUT="build/$APP_NAME.app"
+    rm -rf "$OUT"
+    mkdir -p build
+    ditto --noextattr --noacl "$APP_DIR" "$OUT"
+    echo
+    echo "Done: $OUT"
+fi

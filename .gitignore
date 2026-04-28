@@ -1,0 +1,13 @@
+.DS_Store
+.build/
+.swiftpm/
+build/
+Package.resolved
+*.xcodeproj/xcuserdata/
+
+# The sample repo is generated on demand by Sample\ Project/init.sh —
+# don't track its output if the user runs it inside this tree.
+Sample Project/.git/
+Sample Project/*.txt
+Sample Project/*.md
+!Sample Project/init.sh

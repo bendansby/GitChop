@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        GitChop intentionally is NOT sandboxed: it shells out to /usr/bin/git
+        as a child process and reads/writes whatever directory the user
+        points it at. Sandbox blocks both. Hardened runtime is still on.
+    -->
+</dict>
+</plist>

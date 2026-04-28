@@ -1,0 +1,13 @@
+<h2>Initial preview</h2>
+<ul>
+    <li><strong>Visual <code>git rebase -i</code>.</strong> Open a repo, see the last N commits as a list, drag to reorder, change verbs with one click. Apply runs <code>git rebase</code> behind the scenes.</li>
+    <li><strong>Verbs in v0.1:</strong> <code>pick</code>, <code>squash</code>, <code>fixup</code>, <code>drop</code>. Reword and split-commit (<code>edit</code>) come in v0.2.</li>
+    <li><strong>Auto-backup ref.</strong> Every Apply writes <code>refs/gitchop-backup/&lt;timestamp&gt;</code> first; if anything goes wrong GitChop aborts and resets HEAD back to it.</li>
+    <li><strong>Diff pane.</strong> Click any commit to see its <code>git show</code> in the right pane.</li>
+</ul>
+<h2>Known limits</h2>
+<ul>
+    <li>No reword — change subjects via terminal for now (or wait for v0.2).</li>
+    <li>No conflict resolver — if the rebase hits a conflict, GitChop aborts and rolls back. Resolve conflicts in your terminal/mergetool, then come back.</li>
+    <li>Loads the most recent 12 commits. Custom range picker is v0.2.</li>
+</ul>

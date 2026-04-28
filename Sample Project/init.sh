@@ -11,12 +11,19 @@
 # Re-runnable: deletes the destination first so each run starts clean.
 #
 # Usage:
-#   bash init.sh                              # repo at ~/Desktop/GitChop\ Sample
+#   bash init.sh                              # repo at ./repo/ (next to this script)
 #   bash init.sh /path/to/somewhere/else      # custom location
+#
+# Default location is Sample Project/repo/ inside the GitChop project so
+# you can point GitChop's Open Repo dialog at it directly. The outer
+# GitChop repo's .gitignore excludes Sample Project/repo/, so the
+# generated sample never accidentally becomes part of GitChop's own
+# git history.
 
 set -euo pipefail
 
-DEST="${1:-$HOME/Desktop/GitChop Sample}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+DEST="${1:-$SCRIPT_DIR/repo}"
 echo "==> Creating sample repo at: $DEST"
 
 if [[ -e "$DEST" ]]; then
@@ -842,7 +849,8 @@ git log --no-merges -12 --reverse --pretty='format:%h  %an — %s' | head -12
 echo
 echo
 echo "Try it:"
-echo "  • Open Repo… in GitChop and pick: $DEST"
+echo "  • In GitChop, Open Repo… and pick:"
+echo "      $DEST"
 echo "  • Practice candidates:"
 echo "      drop      'WIP: starting TOML output'"
 echo "      fixup     'Fix JSON output: don't double-escape' into 'Start JSON output support'"

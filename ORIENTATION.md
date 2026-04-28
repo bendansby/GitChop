@@ -18,17 +18,32 @@ Currently at **0.1.0 (preview)**. macOS 14+. Bundle ID
 # 1. Build and install GitChop locally
 bash scripts/build-app.sh
 
-# 2. Generate a sample repo with deliberate rebase candidates
+# 2. Generate a self-contained sample repo at Sample Project/repo/
 bash "Sample Project/init.sh"
 
 # 3. In GitChop, hit "Open Repo…" and point it at:
-#    ~/Desktop/GitChop Sample
+#    Mac Apps/GitChop/Sample Project/repo
 ```
 
-The sample repo has 8 commits including:
-- a "Fix typo" commit you'd want to **fixup** into the README commit
-- a "WIP" commit you'd want to **drop**
-- two related polishing commits to **squash** together
+The sample is a small bash CLI project (`tabby` — CSV/Markdown/JSON
+table converter) with 26 commits across three authors, two merged
+feature/bugfix branches, and a deliberate 12-commit "local WIP" tail
+that exercises every rebase verb in v0.1:
+
+- **drop**     "WIP: starting TOML output (probably won't ship)"
+- **fixup**    "Fix JSON output: don't double-escape" → into "Start JSON output support"
+- **squash**   "Add CSV→JSON output test" → with "Start JSON output support"
+- **reorder**  "Fix CI: install jq…" should land near the JSON feature commit, not 8 commits later
+
+The init script ends by printing the graph and a guided practice list
+so you can jump straight in. Re-running it deletes and regenerates the
+sample, so it's safe to chop, mess up, and reset.
+
+`Sample Project/repo/` is its own self-contained git repo (gitignored
+by GitChop's outer repo). That's why opening it in GitChop shows the
+sample's history rather than GitChop's own — `git rev-parse
+--show-toplevel` stops at the nearest `.git` directory, which is the
+sample's, not the outer one.
 
 ---
 

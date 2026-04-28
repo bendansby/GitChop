@@ -124,8 +124,12 @@ struct RebaseConfirmSheet: View {
                 .foregroundStyle(.secondary)
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 0) {
-                    ForEach(session.plan) { item in
-                        previewRow(item)
+                    ForEach(Array(session.plan.enumerated()), id: \.element.id) { idx, item in
+                        previewRow(
+                            item,
+                            attachedToAbove: PlanInspector.attachedToAbove(at: idx, in: session.plan),
+                            absorbedCount:   PlanInspector.absorbedCount(at: idx, in: session.plan)
+                        )
                     }
                 }
                 .padding(.horizontal, 6)
@@ -141,8 +145,23 @@ struct RebaseConfirmSheet: View {
         }
     }
 
-    private func previewRow(_ item: PlanItem) -> some View {
+    private func previewRow(
+        _ item: PlanItem,
+        attachedToAbove: Bool,
+        absorbedCount: Int
+    ) -> some View {
         HStack(spacing: 10) {
+            // Attach indicator (or reserved space) — same convention as
+            // the main commit list so the rows line up visually.
+            if attachedToAbove {
+                Image(systemName: "arrow.turn.left.up")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(item.verb.color)
+                    .frame(width: 14)
+            } else {
+                Color.clear.frame(width: 14, height: 1)
+            }
+
             Text(item.verb.rawValue)
                 .font(.system(.caption, design: .monospaced).bold())
                 .foregroundStyle(.white)
@@ -160,6 +179,16 @@ struct RebaseConfirmSheet: View {
                 .font(.callout)
                 .foregroundStyle(item.verb == .drop ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.primary))
                 .strikethrough(item.verb == .drop)
+            if absorbedCount > 0 {
+                Text("+\(absorbedCount)")
+                    .font(.system(.caption2, design: .monospaced).bold())
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(
+                        Capsule().fill(Color.secondary.opacity(0.15))
+                    )
+            }
             Spacer()
         }
         .padding(.vertical, 3)

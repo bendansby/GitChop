@@ -17,9 +17,13 @@ struct CommitListView: View {
                     get: { session.selectedID },
                     set: { session.selectCommit($0) }
                 )) {
-                    ForEach(session.plan) { item in
-                        CommitRow(item: item)
-                            .tag(item.id)
+                    ForEach(Array(session.plan.enumerated()), id: \.element.id) { idx, item in
+                        CommitRow(
+                            item: item,
+                            attachedToAbove: PlanInspector.attachedToAbove(at: idx, in: session.plan),
+                            absorbedCount:   PlanInspector.absorbedCount(at: idx, in: session.plan)
+                        )
+                        .tag(item.id)
                     }
                     .onMove { offsets, destination in
                         session.move(from: offsets, to: destination)
@@ -142,6 +146,9 @@ struct CommitListView: View {
 
 private struct CommitRow: View {
     let item: PlanItem
+    let attachedToAbove: Bool   // squash/fixup with a valid parent above
+    let absorbedCount: Int      // for picks: how many squash/fixup rows fold into me
+
     @EnvironmentObject var session: RebaseSession
 
     var body: some View {
@@ -150,6 +157,12 @@ private struct CommitRow: View {
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .frame(width: 14)
+
+            // "Merges into the row above" cue. Only shown for squash/fixup
+            // when there's a valid pick chain to attach to. Sized to a
+            // fixed width so the verb chip's left edge stays aligned
+            // across rows that do and don't have it.
+            attachIndicator
 
             verbChip
 
@@ -164,6 +177,21 @@ private struct CommitRow: View {
                 .foregroundStyle(item.verb == .drop ? AnyShapeStyle(Color.secondary) : AnyShapeStyle(.primary))
                 .strikethrough(item.verb == .drop)
 
+            // "+N merging in" badge for picks that absorb squash/fixup
+            // commits below them. Reads as a counterpart to the attach
+            // indicator on those rows.
+            if absorbedCount > 0 {
+                Text("+\(absorbedCount)")
+                    .font(.system(.caption2, design: .monospaced).bold())
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(
+                        Capsule().fill(Color.secondary.opacity(0.15))
+                    )
+                    .help("\(absorbedCount) commit\(absorbedCount == 1 ? "" : "s") below will be merged into this one")
+            }
+
             Spacer(minLength: 8)
 
             Text(item.commit.author)
@@ -173,6 +201,23 @@ private struct CommitRow: View {
         }
         .padding(.vertical, 2)
         .opacity(item.verb == .drop ? 0.55 : 1.0)
+    }
+
+    /// Up-pointing arrow that indicates the row's commit will be folded
+    /// into the row above. Color matches the verb so squash and fixup
+    /// chains are visually grouped.
+    @ViewBuilder
+    private var attachIndicator: some View {
+        if attachedToAbove {
+            Image(systemName: "arrow.turn.left.up")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(item.verb.color)
+                .frame(width: 14)
+                .help("Merges into the commit above")
+        } else {
+            // Reserve space so verb chips align across the list
+            Color.clear.frame(width: 14, height: 1)
+        }
     }
 
     private var verbChip: some View {

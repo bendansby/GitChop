@@ -25,18 +25,7 @@ struct ContentView: View {
                 }
             }
             ToolbarItem(placement: .primaryAction) {
-                Button {
-                    guard let session = workspace.activeSession else { return }
-                    Task {
-                        await session.apply()
-                        if session.lastOutcome != nil { showOutcome = true }
-                    }
-                } label: {
-                    Label("Apply Rebase", systemImage: "checkmark.seal.fill")
-                }
-                .disabled(!(workspace.activeSession?.hasChanges ?? false)
-                    || (workspace.activeSession?.isApplying ?? false))
-                .keyboardShortcut(.return, modifiers: [.command])
+                applyButton
             }
         }
         .alert(
@@ -95,6 +84,53 @@ struct ContentView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.windowBackgroundColor))
+    }
+
+    /// Apply Rebase button. Three visible states:
+    ///
+    ///   • no changes pending → outline seal, secondary color, disabled,
+    ///     tooltip explains the gate. Looks visibly off.
+    ///   • changes pending    → filled seal, accent color, enabled,
+    ///     enter (⌘↩) shortcut. Looks visibly armed.
+    ///   • applying           → progress spinner, disabled.
+    ///
+    /// The icon swap (`seal` ↔ `seal.fill`) plus the color shift makes
+    /// "ready / not ready" readable at a glance — the bare `.disabled`
+    /// dim was too subtle, especially in the toolbar's bordered chrome.
+    private var applyButton: some View {
+        let session = workspace.activeSession
+        let hasChanges = session?.hasChanges ?? false
+        let isApplying = session?.isApplying ?? false
+        let canApply = hasChanges && !isApplying
+
+        return Button {
+            guard let session = session else { return }
+            Task {
+                await session.apply()
+                if session.lastOutcome != nil { showOutcome = true }
+            }
+        } label: {
+            if isApplying {
+                Label {
+                    Text("Applying…")
+                } icon: {
+                    ProgressView().controlSize(.small)
+                }
+            } else {
+                Label(
+                    "Apply Rebase",
+                    systemImage: hasChanges ? "checkmark.seal.fill" : "checkmark.seal"
+                )
+                .foregroundStyle(hasChanges ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+            }
+        }
+        .disabled(!canApply)
+        .keyboardShortcut(.return, modifiers: [.command])
+        .help(canApply
+              ? "Apply rebase (⌘↩)"
+              : (session == nil
+                 ? "Open a repo first"
+                 : "Reorder a commit or change a verb to enable"))
     }
 
     private func statusBar(session: RebaseSession) -> some View {

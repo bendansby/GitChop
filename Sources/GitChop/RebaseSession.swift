@@ -33,6 +33,12 @@ final class RebaseSession: ObservableObject, Identifiable {
     /// methods on this @MainActor class without Swift 6 complaining.
     nonisolated static let loadMoreIncrement = 12
 
+    /// When set, a SplitCommitSheet is open for this PlanItem's id.
+    /// Toggled by setVerb (when the user picks .edit) and by openSplitSheet
+    /// (when they re-open it for an already-edit row); cleared when the
+    /// sheet calls back with Save or Cancel.
+    @Published var splitSheetCommitID: String?
+
     /// True when there's a plan loaded and at least one row has a non-pick
     /// verb or has been reordered. Drives the Apply button's enabled state
     /// — a no-op rebase is harmless but pointless.
@@ -131,7 +137,32 @@ final class RebaseSession: ObservableObject, Identifiable {
 
     func setVerb(of id: String, to verb: Verb) {
         guard let idx = plan.firstIndex(where: { $0.id == id }) else { return }
+        let previousVerb = plan[idx].verb
         plan[idx].verb = verb
+        // Switching AWAY from edit clears any saved split — there's no
+        // sensible interpretation of "split this commit, but it's a pick"
+        if previousVerb == .edit && verb != .edit {
+            plan[idx].editPlan = nil
+        }
+        recomputeChangedFlag()
+        // Switching TO edit auto-opens the split sheet so the user
+        // doesn't have to discover a separate action — the verb itself
+        // implies "I want to break this apart."
+        if verb == .edit && previousVerb != .edit {
+            splitSheetCommitID = id
+        }
+    }
+
+    /// Re-open the split sheet for an already-edit row. Bound to a
+    /// "Split…" affordance on edit-marked rows.
+    func openSplitSheet(for id: String) {
+        guard let item = plan.first(where: { $0.id == id }), item.verb == .edit else { return }
+        splitSheetCommitID = id
+    }
+
+    func setEditPlan(of id: String, to plan: EditPlan?) {
+        guard let idx = self.plan.firstIndex(where: { $0.id == id }) else { return }
+        self.plan[idx].editPlan = plan
         recomputeChangedFlag()
     }
 

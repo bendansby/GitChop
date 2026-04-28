@@ -23,33 +23,35 @@ enum PlanInspector {
         let v = plan[idx].verb
         guard v == .squash || v == .fixup else { return false }
 
-        // Walk back looking for a non-drop. If we find pick / squash /
-        // fixup, this row has something to attach to. (squash/fixup
-        // above means we're chaining into an existing absorption.)
+        // Walk back looking for a non-drop. pick / edit / squash /
+        // fixup all count as valid attach targets (squash and fixup
+        // above mean we're chaining into an existing absorption; edit
+        // produces a real commit at apply time that we can attach to).
         var i = idx - 1
         while i >= 0 {
             switch plan[i].verb {
-            case .pick, .squash, .fixup: return true
-            case .drop:                  i -= 1
+            case .pick, .edit, .squash, .fixup: return true
+            case .drop:                         i -= 1
             }
         }
         return false
     }
 
-    /// For a `pick` row at `idx`, the count of squash/fixup rows below
-    /// that will fold into it before the next pick. Drops are skipped
-    /// (don't count, don't break the chain). Returns 0 for non-picks
-    /// and for picks with nothing absorbing into them.
+    /// For a `pick` or `edit` row at `idx`, the count of squash/fixup
+    /// rows below that will fold into it before the next pick or edit.
+    /// Drops are skipped (don't count, don't break the chain). Returns
+    /// 0 for non-absorbing rows and for rows with nothing absorbing
+    /// into them.
     static func absorbedCount(at idx: Int, in plan: [PlanItem]) -> Int {
         guard idx >= 0 && idx < plan.count else { return 0 }
-        guard plan[idx].verb == .pick else { return 0 }
+        guard plan[idx].verb == .pick || plan[idx].verb == .edit else { return 0 }
 
         var count = 0
         var i = idx + 1
         while i < plan.count {
             switch plan[i].verb {
             case .squash, .fixup: count += 1
-            case .pick:           return count
+            case .pick, .edit:    return count
             case .drop:           break    // skip, keep walking
             }
             i += 1

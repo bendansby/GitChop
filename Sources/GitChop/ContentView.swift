@@ -124,6 +124,31 @@ struct ContentView: View {
                 }
             }
         }
+        // Split-commit sheet. Driven by session.splitSheetCommitID so
+        // the verb-chip "edit" path can pop the sheet without going
+        // through ContentView's @State (CommitListView doesn't have
+        // direct access to that state). Cleared on Save/Cancel.
+        .sheet(
+            isPresented: Binding(
+                get: { workspace.activeSession?.splitSheetCommitID != nil },
+                set: { if !$0 { workspace.activeSession?.splitSheetCommitID = nil } }
+            )
+        ) {
+            if let session = workspace.activeSession,
+               let id = session.splitSheetCommitID {
+                SplitCommitSheet(
+                    session: session,
+                    planItemID: id,
+                    onSave: { plan in
+                        session.setEditPlan(of: id, to: plan)
+                        session.splitSheetCommitID = nil
+                    },
+                    onCancel: {
+                        session.splitSheetCommitID = nil
+                    }
+                )
+            }
+        }
     }
 
     /// The main split + status bar, parameterized on the active session.

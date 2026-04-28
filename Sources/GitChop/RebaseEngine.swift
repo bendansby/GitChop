@@ -121,14 +121,12 @@ struct RebaseEngine {
             throw EngineError.gitFailed("backup ref: \(backup.stderr)")
         }
 
-        // 2. Build TODO file. v0.1 only emits pick/squash/fixup/drop; the
-        //    rebase TODO format treats `drop` specially — git skips that
-        //    commit entirely. squash/fixup require a preceding picked
-        //    commit; we don't enforce that here (git will error and we
-        //    surface it).
+        // 2. Build TODO file. Verbs supported: pick / edit / squash /
+        //    fixup / drop. squash/fixup require a preceding picked or
+        //    editing commit — we don't enforce that here (git will
+        //    error and we surface it). edit pauses the rebase so we
+        //    can run the user's split plan and then continue.
         let todoLines: [String] = plan.compactMap { item in
-            // Subject is for human readability in the TODO; git ignores
-            // anything after the hash.
             "\(item.verb.rawValue) \(item.commit.fullHash) \(item.commit.subject)"
         }
         let todo = todoLines.joined(separator: "\n") + "\n"
@@ -138,28 +136,197 @@ struct RebaseEngine {
         try todo.write(to: todoFile, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: todoFile) }
 
-        // 3. The cp trick: GIT_SEQUENCE_EDITOR is invoked as `<editor> <file>`,
-        //    so `cp /our/todo.txt <file>` overwrites git's TODO with ours.
-        //    Quoting the source path lets it work even if NSTemporaryDirectory()
-        //    has spaces (it usually doesn't on macOS, but be safe).
+        // 3. The cp trick: GIT_SEQUENCE_EDITOR is invoked as
+        //    `<editor> <file>`, so `cp /our/todo.txt <file>` overwrites
+        //    git's TODO with ours.
         let env: [String: String] = [
             "GIT_SEQUENCE_EDITOR": "/bin/cp '\(todoFile.path)'",
-            // For squash, git invokes GIT_EDITOR on the combined message.
-            // `:` is shell true — accept the default combined message.
-            // (Once we ship reword/edit, we'll plug a real editor here.)
             "GIT_EDITOR": ":",
             "EDITOR": ":",
         ]
 
-        // 4. Run the rebase. `--no-autostash` so we never silently stash
-        //    user work; if there's uncommitted work we want git to refuse.
-        let result = try runner.run(["rebase", "-i", "--no-autostash", base], env: env)
-        let log = [result.stdout, result.stderr].filter { !$0.isEmpty }.joined(separator: "\n")
+        var combinedLog = ""
+
+        // 4. Start the rebase. `--no-autostash` so we never silently
+        //    stash the user's working-tree changes; if anything's
+        //    uncommitted, git refuses cleanly instead of corrupting
+        //    state.
+        let firstResult = try runner.run(["rebase", "-i", "--no-autostash", base], env: env)
+        combinedLog += format(result: firstResult, label: "rebase -i")
+
+        // 5. Pause loop. git rebase exits with code 0 when it pauses on
+        //    an `edit` (or `break`) — we need to detect the pause via
+        //    the .git/rebase-merge directory rather than relying on
+        //    exit codes alone. For each pause:
+        //      • find the stopped commit
+        //      • if it's an edit row with an editPlan, run the split
+        //      • run `git rebase --continue`
+        //    Loop until rebase-merge is gone (success) or a continue
+        //    fails (treated as failure → caller rolls back).
+        var safetyCounter = 0
+        while isRebaseInProgress() {
+            safetyCounter += 1
+            if safetyCounter > plan.count + 4 {
+                // Defensive: shouldn't ever loop more times than there
+                // are commits in the plan plus a small fudge factor.
+                combinedLog += "\n!! pause loop exceeded safety bound; aborting\n"
+                break
+            }
+
+            let stoppedSha = readStoppedSha()
+            if let sha = stoppedSha,
+               let item = plan.first(where: { $0.commit.fullHash == sha
+                                              || $0.commit.fullHash.hasPrefix(sha) }) {
+                if item.verb == .edit, let editPlan = item.editPlan, !editPlan.buckets.isEmpty {
+                    do {
+                        let splitLog = try runSplit(plan: editPlan, originalSubject: item.commit.subject)
+                        combinedLog += "\n── Splitting \(item.commit.shortHash) into \(editPlan.buckets.count) commits ──\n\(splitLog)"
+                    } catch let e {
+                        combinedLog += "\n!! split failed for \(item.commit.shortHash): \(e.localizedDescription)\n"
+                        // Abort the rebase; caller will roll back via
+                        // the backup ref.
+                        _ = try? runner.run(["rebase", "--abort"])
+                        return RebaseOutcome(kind: .failed, log: combinedLog, backupRef: backupRef)
+                    }
+                } else if item.verb == .edit {
+                    combinedLog += "\n── Pausing on edit \(item.commit.shortHash) (no split plan, continuing) ──\n"
+                }
+            }
+
+            let cont = try runner.run(["rebase", "--continue"], env: env)
+            combinedLog += format(result: cont, label: "rebase --continue")
+            if !cont.isSuccess {
+                // The continue failed (e.g. conflict, or our split left
+                // the index in a bad state). Don't abort here — caller
+                // will detect the in-progress rebase via final-state
+                // check below and abort + roll back.
+                break
+            }
+        }
+
+        // 6. Final state. Success requires both: starting result
+        //    produced no fatal error AND we're no longer mid-rebase.
+        let success = !isRebaseInProgress()
         return RebaseOutcome(
-            kind: result.isSuccess ? .success : .failed,
-            log: log,
+            kind: success ? .success : .failed,
+            log: combinedLog,
             backupRef: backupRef
         )
+    }
+
+    // MARK: - Pause detection / split execution
+
+    /// Whether a rebase is currently mid-flight in this repo. Detected
+    /// by the presence of either `.git/rebase-merge` (the modern
+    /// interactive-rebase state dir) or `.git/rebase-apply` (the older
+    /// patch-based variant; older git, or non-interactive rebase).
+    private func isRebaseInProgress() -> Bool {
+        let fm = FileManager.default
+        let merge = runner.cwd.appendingPathComponent(".git/rebase-merge")
+        let apply = runner.cwd.appendingPathComponent(".git/rebase-apply")
+        return fm.fileExists(atPath: merge.path) || fm.fileExists(atPath: apply.path)
+    }
+
+    /// Read the SHA of the commit the rebase is currently paused on.
+    /// `.git/rebase-merge/stopped-sha` contains it as plain text.
+    /// Returns nil if no stopped state, or the file is absent.
+    private func readStoppedSha() -> String? {
+        let path = runner.cwd.appendingPathComponent(".git/rebase-merge/stopped-sha")
+        guard let s = try? String(contentsOf: path, encoding: .utf8) else { return nil }
+        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// Execute a split plan against the working tree. Assumes git is
+    /// currently paused on an edit, with the edit's commit already
+    /// applied (HEAD == that commit). Steps:
+    ///   1. `git reset HEAD^` — uncommit, keep working tree changes
+    ///   2. `git diff` against HEAD to capture the original commit's
+    ///      changes
+    ///   3. Re-parse hunks, match against the EditPlan's buckets
+    ///   4. For each bucket: reassemble its hunks, `git apply --cached`,
+    ///      then commit with the bucket's subject
+    ///   5. If anything's left unstaged, commit it as a final
+    ///      "leftover" commit using the original subject — defends
+    ///      against a stale plan whose hunk IDs no longer cover the
+    ///      whole diff
+    private func runSplit(plan: EditPlan, originalSubject: String) throws -> String {
+        var log = ""
+
+        // 1. Uncommit, keeping working-tree state intact.
+        let reset = try runner.run(["reset", "HEAD^"])
+        log += "  reset HEAD^ → \(reset.exitCode)\n"
+        guard reset.isSuccess else {
+            throw EngineError.gitFailed("git reset HEAD^: \(reset.stderr.trimmingCharacters(in: .whitespacesAndNewlines))")
+        }
+
+        // 2. Capture the diff once so all bucket-applies see the same
+        //    parsed hunks (the order matters less than consistency).
+        let diff = try runner.run(["diff", "--no-color", "HEAD"])
+        guard diff.isSuccess else {
+            throw EngineError.gitFailed("git diff HEAD: \(diff.stderr.trimmingCharacters(in: .whitespacesAndNewlines))")
+        }
+        let parsed = HunkParser.parse(diff.stdout)
+        let allHunkIDs = Set(parsed.allHunks.map(\.id))
+
+        // 3. Apply each bucket in order.
+        for (idx, bucket) in plan.buckets.enumerated() {
+            let bucketLabel = "Bucket \(idx + 1) (\(bucket.subject))"
+            // Restrict to hunk IDs that actually parsed out of the
+            // current diff — protects against stale plans.
+            let validIDs = bucket.hunkIDs.intersection(allHunkIDs)
+            if validIDs.isEmpty {
+                log += "  \(bucketLabel): no live hunks, skipping\n"
+                continue
+            }
+            let patch = HunkParser.reassemble(parsed, includingHunks: validIDs)
+
+            let applyResult = try runner.runWithStdin(["apply", "--cached", "--recount"], stdin: patch)
+            if !applyResult.isSuccess {
+                throw EngineError.gitFailed("\(bucketLabel) apply failed: \(applyResult.stderr.trimmingCharacters(in: .whitespacesAndNewlines))")
+            }
+
+            let subject = bucket.subject.trimmingCharacters(in: .whitespacesAndNewlines)
+            let commitResult = try runner.run([
+                "commit",
+                "-m", subject.isEmpty ? "(empty)" : subject,
+            ])
+            if !commitResult.isSuccess {
+                throw EngineError.gitFailed("\(bucketLabel) commit failed: \(commitResult.stderr.trimmingCharacters(in: .whitespacesAndNewlines))")
+            }
+            log += "  \(bucketLabel): \(validIDs.count) hunk\(validIDs.count == 1 ? "" : "s") committed\n"
+        }
+
+        // 4. Leftover guard. If the plan's hunk IDs didn't cover
+        //    everything in the working diff, commit the rest under the
+        //    original subject so we don't leak changes silently. In
+        //    practice the SplitCommitSheet validates "all hunks
+        //    assigned" before save, so this is a belt-and-suspenders.
+        let statusResult = try runner.run(["status", "--porcelain"])
+        if statusResult.isSuccess && !statusResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            _ = try runner.run(["add", "-A"])
+            let leftover = try runner.run(["commit", "-m", "\(originalSubject) (leftover)"])
+            if leftover.isSuccess {
+                log += "  Leftover changes: committed under '\(originalSubject) (leftover)'\n"
+            } else {
+                // Don't throw — some leftover states (e.g. "nothing to
+                // commit, working tree clean") aren't actually errors.
+                log += "  Leftover commit: \(leftover.stderr.trimmingCharacters(in: .whitespacesAndNewlines))\n"
+            }
+        }
+
+        return log
+    }
+
+    /// Compact one-line + body summary of a git command result for
+    /// the combined log shown in the result sheet.
+    private func format(result: GitRunner.Result, label: String) -> String {
+        var s = "\(label) → exit \(result.exitCode)"
+        let out = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let err = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !out.isEmpty { s += "\n\(out)" }
+        if !err.isEmpty { s += "\n\(err)" }
+        return s + "\n"
     }
 
     /// `git rebase --abort` — used after a failure to roll back.

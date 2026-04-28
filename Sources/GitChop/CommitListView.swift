@@ -221,12 +221,29 @@ private struct CommitRow: View {
                     Label("\(verb.rawValue.capitalized) — \(verb.explanation)", systemImage: verb == item.verb ? "checkmark" : "")
                 }
             }
+            // For already-edit rows, expose a way to re-open the
+            // split sheet without first toggling away and back. The
+            // verb itself doesn't change.
+            if item.verb == .edit {
+                Divider()
+                Button(item.editPlan == nil ? "Configure split…" : "Edit split…") {
+                    session.openSplitSheet(for: item.id)
+                }
+            }
         } label: {
             HStack(spacing: 4) {
                 Text(item.verb.glyph)
                     .font(.system(.caption, design: .monospaced).bold())
                 Text(item.verb.rawValue)
                     .font(.system(.caption, design: .monospaced))
+                // Bucket-count badge: only shown for edit rows that
+                // have a saved plan, so it's a positive signal "yes,
+                // this is configured" rather than visual noise.
+                if item.verb == .edit, let plan = item.editPlan {
+                    Text("(\(plan.buckets.count))")
+                        .font(.system(.caption2, design: .monospaced))
+                        .opacity(0.85)
+                }
             }
             .foregroundStyle(.white)
             .padding(.horizontal, 8)

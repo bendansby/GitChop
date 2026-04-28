@@ -171,16 +171,10 @@ struct RebaseConfirmSheet: View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Image(systemName: "lifepreserver")
                 .foregroundStyle(.tint)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("A backup ref will be created at `refs/gitchop-backup/<timestamp>` before any change is made.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text("If the rebase fails or hits a conflict, GitChop aborts and resets HEAD back to that ref automatically.")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            Text("A backup ref will be saved at `refs/gitchop-backup/<timestamp>` first — if the rebase fails or hits a conflict, GitChop aborts and resets HEAD back to it automatically.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

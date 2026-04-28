@@ -2,11 +2,10 @@
 """
 Render GitChop's app icon at 1024x1024 to ../Icon.png.
 
-Concept (v3): scissors as the hero, with a vertical commit chain
-behind. The scissors descend diagonally from the upper right; blades
-open ~25 degrees each; tips converge just past one of the commit dots
-on the chain. Reads as "snip a commit out of the git graph" — chop +
-rebase in one image.
+Concept (v4): scissors closing on a commit in a git chain — same
+composition as v3 — but rendered for macOS 26 ("Liquid Glass"). Brighter
+saturated palette, top glass highlight, per-dot inner-light highlights,
+and a soft inner shadow at the bottom for depth.
 
 Run:
     python3 scripts/render-icon.py
@@ -31,6 +30,7 @@ def squircle_mask(size, radius_ratio=0.225):
 
 
 def vertical_gradient(size, top, bottom):
+    """Vertical RGB gradient. Caller blends to RGBA later if needed."""
     w, h = size
     img = Image.new("RGB", size, top)
     d = ImageDraw.Draw(img)
@@ -73,21 +73,56 @@ def filled_circle(diameter, color, ring=None):
     return img
 
 
+def vibrant_dot(diameter, base_color, ring_color=(255, 255, 255, 220), ring_w=12):
+    """
+    Filled dot with:
+      • outer white ring (the bezel)
+      • base fill in `base_color`
+      • inner radial highlight near the top to give a "lit from above"
+        glassy read.
+    """
+    s = diameter + ring_w * 2
+    img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+
+    # Bezel ring
+    d.ellipse((0, 0, s - 1, s - 1), fill=ring_color)
+    # Base fill
+    d.ellipse((ring_w, ring_w, ring_w + diameter - 1, ring_w + diameter - 1), fill=base_color)
+
+    # Inner highlight: small offset white circle at upper-left, blurred
+    # and clipped to the dot's interior. Reads as a glossy specular.
+    highlight = Image.new("RGBA", (s, s), (0, 0, 0, 0))
+    hd = ImageDraw.Draw(highlight)
+    hl_d = int(diameter * 0.55)
+    hl_x = ring_w + int(diameter * 0.18)
+    hl_y = ring_w + int(diameter * 0.10)
+    hd.ellipse(
+        (hl_x, hl_y, hl_x + hl_d, hl_y + hl_d),
+        fill=(255, 255, 255, 110),
+    )
+    highlight = highlight.filter(ImageFilter.GaussianBlur(int(diameter * 0.06)))
+
+    # Mask the highlight to the dot's interior so it doesn't bleed past
+    # the bezel ring.
+    mask = Image.new("L", (s, s), 0)
+    ImageDraw.Draw(mask).ellipse(
+        (ring_w, ring_w, ring_w + diameter - 1, ring_w + diameter - 1),
+        fill=255,
+    )
+    img.paste(highlight, (0, 0), mask)
+    return img
+
+
 # ── scissors ──────────────────────────────────────────────────────────
 
 def tapered_blade_polygon(pivot, tip, base_w, tip_w):
-    """
-    Quadrilateral that tapers from `base_w` at `pivot` to `tip_w` at
-    `tip`. Used to draw a single scissor blade as a sharp triangle-ish
-    shape rather than a uniform-width line.
-    """
     px, py = pivot
     tx, ty = tip
     dx, dy = tx - px, ty - py
     length = hypot(dx, dy)
     if length == 0:
         return [pivot, pivot, pivot, pivot]
-    # Unit perpendicular (left side of the direction vector)
     nx, ny = -dy / length, dx / length
     p1 = (px + nx * base_w / 2, py + ny * base_w / 2)
     p2 = (px - nx * base_w / 2, py - ny * base_w / 2)
@@ -96,40 +131,25 @@ def tapered_blade_polygon(pivot, tip, base_w, tip_w):
     return [p1, p2, p3, p4]
 
 
-def render_scissors(canvas_size, pivot, length=520, opening_deg=24,
-                    loop_opening_deg=32,
-                    direction_deg=210, color=(255, 255, 255, 240)):
-    """
-    Draw a stylized scissors on a transparent layer the size of the
-    icon. `direction_deg` is the angle the scissors point in (where the
-    blade tips go); 0° = right, 90° = down (PIL convention with y-down).
-    `opening_deg` is each blade's deflection from the centerline at the
-    front; `loop_opening_deg` is the corresponding angle at the back —
-    typically wider so the finger loops actually look like two separate
-    handles instead of stacked rings.
-    """
+def render_scissors(canvas_size, pivot, length=520, opening_deg=8,
+                    loop_opening_deg=32, direction_deg=180,
+                    color=(255, 255, 255, 245),
+                    inner_pivot_color=(0x1B, 0x2A, 0x4E, 255)):
     layer = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
     px, py = pivot
 
-    # Blade geometry
-    base_w = int(length * 0.115)   # chunky at the pivot
-    tip_w  = max(2, int(length * 0.012))   # nearly a point at the tip
+    base_w = int(length * 0.115)
+    tip_w  = max(2, int(length * 0.012))
 
-    # Blade angles (around direction_deg)
     aA = direction_deg - opening_deg
     aB = direction_deg + opening_deg
     tipA = (px + length * cos(radians(aA)), py + length * sin(radians(aA)))
     tipB = (px + length * cos(radians(aB)), py + length * sin(radians(aB)))
 
-    # Blades — drawn as tapered polygons so they read as cutting blades
     d.polygon(tapered_blade_polygon(pivot, tipA, base_w, tip_w), fill=color)
     d.polygon(tapered_blade_polygon(pivot, tipB, base_w, tip_w), fill=color)
 
-    # Finger loops — sit at the back of the scissors, on the opposite
-    # side of the pivot from the tips. Loops splay wider than the
-    # blades so the silhouette reads as a real pair of scissors and not
-    # two stacked rings.
     loop_outer = int(length * 0.30)
     loop_ring  = int(length * 0.060)
     back_dir = direction_deg + 180
@@ -148,16 +168,9 @@ def render_scissors(canvas_size, pivot, length=520, opening_deg=24,
             outline=color, width=loop_ring,
         )
 
-    # Loop "shafts" — short rounded bars from each loop toward the
-    # pivot, so the loops feel attached rather than floating. They
-    # also visually thicken the back of the scissors which reads as a
-    # proper scissors silhouette.
     shaft_base_w = int(base_w * 0.95)
     shaft_tip_w  = int(base_w * 0.82)
     for cx, cy in (lA_center, lB_center):
-        # From near the loop center to the pivot
-        # Pull the start a bit toward the pivot so the shaft tucks
-        # under the loop ring instead of starting at its edge.
         dx, dy = px - cx, py - cy
         dist = hypot(dx, dy)
         if dist == 0:
@@ -170,57 +183,122 @@ def render_scissors(canvas_size, pivot, length=520, opening_deg=24,
             fill=color,
         )
 
-    # Pivot rivet — small filled circle at the cross point to ground
-    # everything visually.
     pivot_d = int(base_w * 1.05)
     d.ellipse(
         (px - pivot_d / 2, py - pivot_d / 2,
          px + pivot_d / 2, py + pivot_d / 2),
         fill=color,
     )
-    # Inner pivot dot in the bg color for a subtle recessed look
     inner_d = int(pivot_d * 0.34)
     d.ellipse(
         (px - inner_d / 2, py - inner_d / 2,
          px + inner_d / 2, py + inner_d / 2),
-        fill=(0x1B, 0x2A, 0x4E, 255),
+        fill=inner_pivot_color,
     )
 
     return layer
 
 
+# ── glass effects ─────────────────────────────────────────────────────
+
+def add_glass_highlight(canvas_size):
+    """
+    A soft white-to-transparent radial gloss at the top, mimicking how
+    light catches a curved glass surface. Mostly affects the upper third
+    of the squircle. Composited with mode=normal, alpha doing the work.
+    """
+    w, h = canvas_size
+    layer = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    # Big elliptical highlight — wider than the canvas so the falloff
+    # at the corners is gradual.
+    hl_w = int(w * 1.40)
+    hl_h = int(h * 0.60)
+    hl_cx = w // 2
+    hl_cy = -int(h * 0.10)   # mostly above the canvas top
+    # Build a faux radial gradient by stacking multiple semi-transparent
+    # ellipses at decreasing alpha. Pillow doesn't have a native radial
+    # gradient brush.
+    layers = 26
+    for i in range(layers):
+        t = i / (layers - 1)
+        ew = int(hl_w * (0.20 + 0.80 * t))
+        eh = int(hl_h * (0.20 + 0.80 * t))
+        alpha = int(70 * (1 - t) ** 2)
+        if alpha <= 0:
+            continue
+        d.ellipse(
+            (hl_cx - ew // 2, hl_cy - eh // 2,
+             hl_cx + ew // 2, hl_cy + eh // 2),
+            fill=(255, 255, 255, alpha),
+        )
+    return layer.filter(ImageFilter.GaussianBlur(int(w * 0.025)))
+
+
+def add_bottom_inner_shadow(canvas_size, mask):
+    """
+    Subtle inner shadow at the bottom of the squircle — gives the icon
+    a sense that the contents sit inside a curved enclosure with light
+    coming from above.
+    """
+    w, h = canvas_size
+    shadow = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(shadow)
+    # Dark band at the bottom, falling off toward the middle.
+    band_h = int(h * 0.45)
+    for y in range(band_h):
+        t = y / (band_h - 1)
+        # Strongest at the very bottom; quick falloff upward.
+        alpha = int(75 * (t ** 3))
+        d.line([(0, h - 1 - y), (w, h - 1 - y)], fill=(0, 0, 0, alpha))
+    shadow = shadow.filter(ImageFilter.GaussianBlur(int(w * 0.020)))
+
+    # Clip to the squircle so the shadow doesn't extend past the corners.
+    clipped = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
+    clipped.paste(shadow, (0, 0), mask)
+    return clipped
+
+
 # ── icon ──────────────────────────────────────────────────────────────
 
 def render():
-    # Background
-    bg = vertical_gradient((SIZE, SIZE), (0x1B, 0x2A, 0x4E), (0x3D, 0x6B, 0xC9))
+    # Background — vibrant electric-blue gradient, brighter than v3.
+    # Picked for color-pop in both light and dark Dock chrome.
+    bg = vertical_gradient((SIZE, SIZE), (0x18, 0x3C, 0xCC), (0x55, 0xA0, 0xFF))
     icon = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
-    icon.paste(bg, (0, 0), squircle_mask(SIZE))
+    mask = squircle_mask(SIZE)
+    icon.paste(bg, (0, 0), mask)
 
-    # ── git-graph chain (background layer) ──
-    # Vertical line, four commit dots, slightly muted so the scissors
-    # read as foreground.
+    # Top glass highlight — masked to the squircle so it follows the
+    # rounded corners.
+    highlight = add_glass_highlight((SIZE, SIZE))
+    masked_highlight = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    masked_highlight.paste(highlight, (0, 0), mask)
+    icon.alpha_composite(masked_highlight)
+
+    # ── git-graph chain ──
     spine_x = int(SIZE * 0.28)
     spine_top = int(SIZE * 0.20)
     spine_bot = int(SIZE * 0.80)
-    line_w = int(SIZE * 0.018)
+    line_w = int(SIZE * 0.020)
 
+    # Brighter, more visible spine line.
     chain = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
     cd = ImageDraw.Draw(chain)
     cd.rounded_rectangle(
         (spine_x - line_w // 2, spine_top, spine_x + line_w // 2, spine_bot),
-        radius=line_w // 2, fill=(255, 255, 255, 75),
+        radius=line_w // 2, fill=(255, 255, 255, 110),
     )
     icon.alpha_composite(chain)
 
-    # Verb-chip palette
-    PICK   = (0xB7, 0xC2, 0xD4, 255)
-    SQUASH = (0x2C, 0x86, 0xF5, 255)
-    FIXUP  = (0x3F, 0xB0, 0x6E, 255)
-    DROP   = (0xE5, 0x4A, 0x4A, 255)
+    # Vibrant verb-chip palette — saturated, glass-y, macOS-26-flavor.
+    PICK   = (0xE3, 0xEB, 0xF6, 255)   # bright pearl
+    SQUASH = (0x2B, 0x6B, 0xFF, 255)   # cobalt
+    FIXUP  = (0x2E, 0xCD, 0x7C, 255)   # emerald
+    DROP   = (0xFF, 0x4A, 0x57, 255)   # crimson
 
     dot_d = int(SIZE * 0.105)
-    ring_w = int(SIZE * 0.011)
+    ring_w = int(SIZE * 0.012)
     dot_count = 4
     ys = [
         spine_top + int((spine_bot - spine_top) * i / (dot_count - 1))
@@ -228,22 +306,17 @@ def render():
     ]
     colors = [PICK, SQUASH, FIXUP, DROP]
     for y, color in zip(ys, colors):
-        dot = filled_circle(dot_d, color, ring=((255, 255, 255, 200), ring_w))
+        dot = vibrant_dot(dot_d, color,
+                          ring_color=(255, 255, 255, 235),
+                          ring_w=ring_w)
         ws, _ = with_drop_shadow(
-            dot, offset=(0, int(SIZE * 0.006)),
-            blur=int(SIZE * 0.010), opacity=0.30,
+            dot, offset=(0, int(SIZE * 0.008)),
+            blur=int(SIZE * 0.014), opacity=0.32,
         )
         d_w, d_h = ws.size
-        icon.alpha_composite(
-            ws,
-            (spine_x - d_w // 2, y - d_h // 2),
-        )
+        icon.alpha_composite(ws, (spine_x - d_w // 2, y - d_h // 2))
 
-    # ── scissors (foreground hero) ──
-    # Pivot is right of the chain at the same y as the squash commit
-    # (second from top). Blades point straight left with a tight
-    # opening — tips extend past the squash dot, framing it between
-    # the two blades. Reads as "scissors closing on this commit".
+    # ── scissors ──
     squash_y = ys[1]
     pivot = (int(SIZE * 0.70), squash_y)
     scissors_layer = render_scissors(
@@ -251,24 +324,25 @@ def render():
         pivot=pivot,
         length=int(SIZE * 0.50),
         opening_deg=8,
-        direction_deg=180,            # left
-        color=(255, 255, 255, 245),
+        loop_opening_deg=32,
+        direction_deg=180,
+        color=(255, 255, 255, 250),
+        inner_pivot_color=(0x18, 0x3C, 0xCC, 255),
     )
-    # Drop shadow under the entire scissors.
     sc_with_shadow, origin = with_drop_shadow(
         scissors_layer,
-        offset=(0, int(SIZE * 0.018)),
-        blur=int(SIZE * 0.022),
-        opacity=0.40,
+        offset=(0, int(SIZE * 0.022)),
+        blur=int(SIZE * 0.024),
+        opacity=0.42,
     )
-    # The scissors_layer is already the size of the icon, so origin
-    # represents the shadow padding. Composite at -origin to place
-    # the scissors correctly.
     icon.alpha_composite(sc_with_shadow, (-origin[0], -origin[1]))
 
-    # Re-mask so any shadow halo bled past the squircle is clipped.
+    # Subtle bottom inner shadow for enclosure depth.
+    icon.alpha_composite(add_bottom_inner_shadow((SIZE, SIZE), mask))
+
+    # Re-mask in case any halo bled past the squircle.
     out = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
-    out.paste(icon, (0, 0), squircle_mask(SIZE))
+    out.paste(icon, (0, 0), mask)
 
     out.save(OUT, "PNG")
     print(f"Wrote {OUT} ({SIZE}x{SIZE})")

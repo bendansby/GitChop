@@ -1,9 +1,14 @@
 import SwiftUI
 import AppKit
 
-/// Single source of truth for the open repo + plan + diff. Views observe.
+/// Per-repo session state: plan, diff, status, in-flight Apply.
+/// Owned by a `Workspace`, which holds N of these (one per open tab).
 @MainActor
-final class RebaseSession: ObservableObject {
+final class RebaseSession: ObservableObject, Identifiable {
+    /// Stable identity for tab selection / SwiftUI ForEach tagging.
+    /// Distinct from repoURL so we can track a session across reloads.
+    let id = UUID()
+
     @Published var repoURL: URL?
     @Published var branch: String = ""
     @Published var plan: [PlanItem] = []
@@ -42,19 +47,18 @@ final class RebaseSession: ObservableObject {
         repoURL?.lastPathComponent ?? "GitChop"
     }
 
-    // MARK: - Open
+    // MARK: - Init
 
-    func openPicker() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Open"
-        panel.message = "Pick a git repository."
-        if panel.runModal() == .OK, let url = panel.url {
-            load(repo: url)
-        }
+    init() { }
+
+    /// Create a session bound to a repo URL and trigger the initial load.
+    /// Used when a tab is being opened or restored.
+    convenience init(repoURL: URL) {
+        self.init()
+        load(repo: repoURL)
     }
+
+    // MARK: - Load
 
     func load(repo: URL, depth: Int? = nil) {
         repoURL = repo

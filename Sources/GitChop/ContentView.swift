@@ -1,30 +1,32 @@
 import SwiftUI
 
+/// Top-level layout. Reads the workspace, renders the tab strip, and
+/// pipes the active session into the inner views so they don't have
+/// to know about multi-tab state.
 struct ContentView: View {
-    @EnvironmentObject var session: RebaseSession
+    @EnvironmentObject var workspace: Workspace
     @State private var showOutcome = false
 
     var body: some View {
         VStack(spacing: 0) {
-            HSplitView {
-                CommitListView()
-                    .frame(minWidth: 380, idealWidth: 480)
-                DiffPaneView()
-                    .frame(minWidth: 360, idealWidth: 600)
+            TabStripView()
+            if let session = workspace.activeSession {
+                tabContent(for: session)
+            } else {
+                emptyState
             }
-            Divider()
-            statusBar
         }
         .toolbar {
             ToolbarItem(placement: .navigation) {
                 Button {
-                    session.openPicker()
+                    workspace.openPicker()
                 } label: {
                     Label("Open Repo…", systemImage: "folder")
                 }
             }
             ToolbarItem(placement: .primaryAction) {
                 Button {
+                    guard let session = workspace.activeSession else { return }
                     Task {
                         await session.apply()
                         if session.lastOutcome != nil { showOutcome = true }
@@ -32,11 +34,16 @@ struct ContentView: View {
                 } label: {
                     Label("Apply Rebase", systemImage: "checkmark.seal.fill")
                 }
-                .disabled(!session.hasChanges || session.isApplying)
+                .disabled(!(workspace.activeSession?.hasChanges ?? false)
+                    || (workspace.activeSession?.isApplying ?? false))
                 .keyboardShortcut(.return, modifiers: [.command])
             }
         }
-        .alert("Rebase result", isPresented: $showOutcome, presenting: session.lastOutcome) { _ in
+        .alert(
+            "Rebase result",
+            isPresented: $showOutcome,
+            presenting: workspace.activeSession?.lastOutcome
+        ) { _ in
             Button("OK") { }
         } message: { outcome in
             Text(outcome.kind == .success
@@ -45,7 +52,52 @@ struct ContentView: View {
         }
     }
 
-    private var statusBar: some View {
+    /// The main split + status bar, parameterized on the active session.
+    /// We re-inject the session as an EnvironmentObject so the inner
+    /// views (CommitListView, DiffPaneView) can keep reading it directly
+    /// without taking an explicit parameter.
+    @ViewBuilder
+    private func tabContent(for session: RebaseSession) -> some View {
+        VStack(spacing: 0) {
+            HSplitView {
+                CommitListView()
+                    .frame(minWidth: 380, idealWidth: 480)
+                DiffPaneView()
+                    .frame(minWidth: 360, idealWidth: 600)
+            }
+            Divider()
+            statusBar(session: session)
+        }
+        .environmentObject(session)
+        // Tag with session.id so SwiftUI rebuilds the subtree when the
+        // active tab changes, instead of re-using the same view tree
+        // and confusing onAppear/state.
+        .id(session.id)
+    }
+
+    /// Shown when zero tabs are open — friendly call to action rather
+    /// than an empty void.
+    private var emptyState: some View {
+        VStack(spacing: 14) {
+            Spacer()
+            Image(systemName: "scissors")
+                .font(.system(size: 44, weight: .light))
+                .foregroundStyle(.tertiary)
+            Text("No repos open")
+                .font(.title3)
+            Text("Open a git repo to start chopping commits.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Button("Open Repo…") { workspace.openPicker() }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut("o", modifiers: .command)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.windowBackgroundColor))
+    }
+
+    private func statusBar(session: RebaseSession) -> some View {
         HStack {
             if session.isApplying {
                 ProgressView().controlSize(.small)

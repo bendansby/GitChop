@@ -4,6 +4,7 @@ import SwiftUI
 /// click the verb chip to cycle.
 struct CommitListView: View {
     @EnvironmentObject var session: RebaseSession
+    @EnvironmentObject var workspace: Workspace
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -129,7 +130,7 @@ struct CommitListView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 280)
-            Button("Open Repo…") { session.openPicker() }
+            Button("Open Repo…") { workspace.openPicker() }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut("o", modifiers: .command)
             Spacer()

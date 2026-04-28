@@ -2,23 +2,23 @@ import SwiftUI
 
 @main
 struct GitChopApp: App {
-    @StateObject private var session = RebaseSession()
+    @StateObject private var workspace = Workspace()
 
     var body: some Scene {
         WindowGroup("GitChop") {
             ContentView()
-                .environmentObject(session)
-                .frame(minWidth: 900, minHeight: 560)
+                .environmentObject(workspace)
+                .frame(minWidth: 900, minHeight: 600)
         }
         .windowResizability(.contentMinSize)
         .commands {
-            // Rebase tools don't have "documents", so the standard
-            // File > New / File > Open scaffold is more confusing than
-            // useful. Replace with our own Open Repo command.
             CommandGroup(replacing: .newItem) { }
             CommandGroup(after: .newItem) {
-                Button("Open Repo…") { session.openPicker() }
+                Button("Open Repo…") { workspace.openPicker() }
                     .keyboardShortcut("o", modifiers: .command)
+                Button("Close Tab") { workspace.closeActive() }
+                    .keyboardShortcut("w", modifiers: .command)
+                    .disabled(workspace.activeSessionID == nil)
             }
         }
     }

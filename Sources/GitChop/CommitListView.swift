@@ -158,11 +158,13 @@ private struct CommitRow: View {
                 .foregroundStyle(.tertiary)
                 .frame(width: 14)
 
-            // "Merges into the row above" cue. Only shown for squash/fixup
-            // when there's a valid pick chain to attach to. Sized to a
-            // fixed width so the verb chip's left edge stays aligned
-            // across rows that do and don't have it.
-            attachIndicator
+            // Attach-relationship column. Mutually exclusive states:
+            //   • squash/fixup with a valid parent → up-arrow in verb color
+            //   • pick absorbing N below          → "+N" mono text
+            //   • otherwise                        → reserved blank space
+            // Single column so verb chips line up vertically across
+            // every row regardless of which (if either) cue is present.
+            relationshipIndicator
 
             verbChip
 
@@ -177,21 +179,6 @@ private struct CommitRow: View {
                 .foregroundStyle(item.verb == .drop ? AnyShapeStyle(Color.secondary) : AnyShapeStyle(.primary))
                 .strikethrough(item.verb == .drop)
 
-            // "+N merging in" badge for picks that absorb squash/fixup
-            // commits below them. Reads as a counterpart to the attach
-            // indicator on those rows.
-            if absorbedCount > 0 {
-                Text("+\(absorbedCount)")
-                    .font(.system(.caption2, design: .monospaced).bold())
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1)
-                    .background(
-                        Capsule().fill(Color.secondary.opacity(0.15))
-                    )
-                    .help("\(absorbedCount) commit\(absorbedCount == 1 ? "" : "s") below will be merged into this one")
-            }
-
             Spacer(minLength: 8)
 
             Text(item.commit.author)
@@ -203,21 +190,26 @@ private struct CommitRow: View {
         .opacity(item.verb == .drop ? 0.55 : 1.0)
     }
 
-    /// Up-pointing arrow that indicates the row's commit will be folded
-    /// into the row above. Color matches the verb so squash and fixup
-    /// chains are visually grouped.
+    /// One column that shows either "I merge up into the row above"
+    /// (squash/fixup) or "N rows merge into me" (pick), in the same
+    /// horizontal slot so the layout stays aligned regardless of which
+    /// cue (or none) applies.
     @ViewBuilder
-    private var attachIndicator: some View {
-        if attachedToAbove {
-            Image(systemName: "arrow.turn.left.up")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(item.verb.color)
-                .frame(width: 14)
-                .help("Merges into the commit above")
-        } else {
-            // Reserve space so verb chips align across the list
-            Color.clear.frame(width: 14, height: 1)
+    private var relationshipIndicator: some View {
+        ZStack {
+            if attachedToAbove {
+                Image(systemName: "arrow.turn.left.up")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(item.verb.color)
+                    .help("Merges into the commit above")
+            } else if absorbedCount > 0 {
+                Text("+\(absorbedCount)")
+                    .font(.system(.caption2, design: .monospaced).bold())
+                    .foregroundStyle(.secondary)
+                    .help("\(absorbedCount) commit\(absorbedCount == 1 ? "" : "s") below will merge into this one")
+            }
         }
+        .frame(width: 22)
     }
 
     private var verbChip: some View {

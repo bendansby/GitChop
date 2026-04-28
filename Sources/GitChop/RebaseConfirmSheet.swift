@@ -151,16 +151,20 @@ struct RebaseConfirmSheet: View {
         absorbedCount: Int
     ) -> some View {
         HStack(spacing: 10) {
-            // Attach indicator (or reserved space) — same convention as
-            // the main commit list so the rows line up visually.
-            if attachedToAbove {
-                Image(systemName: "arrow.turn.left.up")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(item.verb.color)
-                    .frame(width: 14)
-            } else {
-                Color.clear.frame(width: 14, height: 1)
+            // Same single-column relationship indicator pattern as the
+            // main commit list — keeps the two views visually aligned.
+            ZStack {
+                if attachedToAbove {
+                    Image(systemName: "arrow.turn.left.up")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(item.verb.color)
+                } else if absorbedCount > 0 {
+                    Text("+\(absorbedCount)")
+                        .font(.system(.caption2, design: .monospaced).bold())
+                        .foregroundStyle(.secondary)
+                }
             }
+            .frame(width: 22)
 
             Text(item.verb.rawValue)
                 .font(.system(.caption, design: .monospaced).bold())
@@ -179,16 +183,6 @@ struct RebaseConfirmSheet: View {
                 .font(.callout)
                 .foregroundStyle(item.verb == .drop ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.primary))
                 .strikethrough(item.verb == .drop)
-            if absorbedCount > 0 {
-                Text("+\(absorbedCount)")
-                    .font(.system(.caption2, design: .monospaced).bold())
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1)
-                    .background(
-                        Capsule().fill(Color.secondary.opacity(0.15))
-                    )
-            }
             Spacer()
         }
         .padding(.vertical, 3)

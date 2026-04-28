@@ -1,36 +1,47 @@
 import SwiftUI
 
 /// Horizontal strip of open-repo tabs with a trailing "+" button.
-/// Click to switch, hover-and-click the X to close, click "+" to open
-/// another repo via the standard picker.
+/// Visual style mirrors modern Finder / Safari window tabs: a tab bar
+/// with a subtle baseline divider, tab pills inset with consistent
+/// breathing room top and bottom, distinct selected state.
 struct TabStripView: View {
     @EnvironmentObject var workspace: Workspace
+
+    /// Bar height. Tab pill is inset from this by `tabVerticalInset`
+    /// on each edge so the pill never visually clips the divider rules.
+    private let barHeight: CGFloat = 42
+    private let tabVerticalInset: CGFloat = 7
 
     var body: some View {
         HStack(spacing: 0) {
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 1) {
+                HStack(spacing: 4) {
                     ForEach(workspace.sessions) { session in
-                        TabView(session: session)
+                        TabView(
+                            session: session,
+                            verticalInset: tabVerticalInset
+                        )
                     }
                 }
-                .padding(.horizontal, 4)
+                .padding(.horizontal, 8)
             }
 
             Divider()
-                .frame(height: 22)
+                .frame(height: barHeight - 12)
 
             Button {
                 workspace.openPicker()
             } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 12, weight: .semibold))
-                    .frame(width: 36, height: 32)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 40, height: barHeight)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .help("Open another repo (⌘O)")
         }
-        .frame(height: 36)
+        .frame(height: barHeight)
         .background(Color(.windowBackgroundColor))
         .overlay(alignment: .bottom) {
             Divider()
@@ -38,20 +49,18 @@ struct TabStripView: View {
     }
 }
 
-/// One tab in the strip. The whole pill is the activation target so
-/// clicks on padding around the label still switch tabs; the close X
-/// is overlaid as a small button on the trailing edge.
+/// One tab in the strip. The whole pill is the activation target;
+/// the close X is overlaid on the trailing edge with reserved width
+/// so tabs don't shift when it shows on hover.
 private struct TabView: View {
     @ObservedObject var session: RebaseSession
     @EnvironmentObject var workspace: Workspace
     @State private var hovering = false
+    let verticalInset: CGFloat
 
     var body: some View {
         let isActive = workspace.activeSessionID == session.id
 
-        // Whole-pill activate button. We reserve trailing space inside
-        // the label for the close X so the overlaid button doesn't sit
-        // on top of clickable text.
         Button {
             workspace.setActive(session.id)
         } label: {
@@ -64,26 +73,20 @@ private struct TabView: View {
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(.tertiary)
                 }
-                // Reserved space for the close X. Same width whether
-                // visible or not, so tabs don't shift on hover.
+                // Reserved width for the close X so tabs don't reflow
+                // when hover reveals it.
                 Color.clear.frame(width: 16, height: 16)
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 4)
+            .padding(.vertical, 5)
             .frame(maxHeight: .infinity)
             .contentShape(Rectangle())
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(isActive
-                          ? Color.primary.opacity(0.10)
-                          : (hovering ? Color.primary.opacity(0.05) : .clear))
-            )
+            .background(tabBackground(isActive: isActive))
+            .overlay(tabBorder(isActive: isActive))
         }
         .buttonStyle(.plain)
+        .padding(.vertical, verticalInset)   // breathing room from the bar's top/bottom rules
         .overlay(alignment: .trailing) {
-            // Close button: rendered on top of the reserved-width
-            // trailing area. Active tab's close is always shown;
-            // inactive tabs reveal it on hover so the strip stays calm.
             if isActive || hovering {
                 Button {
                     workspace.close(session.id)
@@ -98,9 +101,36 @@ private struct TabView: View {
                 }
                 .buttonStyle(.plain)
                 .help("Close tab")
-                .padding(.trailing, 8)
+                .padding(.trailing, 9)
             }
         }
         .onHover { hovering = $0 }
+    }
+
+    /// Layered fill:  selected uses the controlBackgroundColor (the
+    /// material macOS uses for a "lifted" surface like a popover or
+    /// inset selection), hover bumps the inactive fill very slightly,
+    /// inactive is fully transparent.
+    @ViewBuilder
+    private func tabBackground(isActive: Bool) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 7, style: .continuous)
+        if isActive {
+            shape.fill(Color(.controlBackgroundColor))
+        } else if hovering {
+            shape.fill(Color.primary.opacity(0.05))
+        } else {
+            shape.fill(.clear)
+        }
+    }
+
+    /// Hairline border on the active tab so the lifted-surface effect
+    /// reads cleanly against the bar background. Inactive tabs have
+    /// no border.
+    @ViewBuilder
+    private func tabBorder(isActive: Bool) -> some View {
+        if isActive {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
+        }
     }
 }

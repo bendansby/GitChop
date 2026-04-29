@@ -204,7 +204,12 @@ struct ContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            TabStripView()
+            // Hide the tab strip until there's something to switch
+            // between. Single-tab users never see the chrome; the
+            // strip appears the moment they open a second repo.
+            if workspace.sessions.count > 1 {
+                TabStripView()
+            }
             if let session = workspace.activeSession {
                 tabContent(for: session)
             } else {

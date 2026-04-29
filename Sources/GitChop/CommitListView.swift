@@ -59,6 +59,7 @@ struct CommitListView: View {
             if !session.branch.isEmpty {
                 Text(session.branch)
                     .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
                     .padding(.horizontal, 6).padding(.vertical, 2)
                     .background(Color.secondary.opacity(0.15))
                     .clipShape(Capsule())
@@ -222,12 +223,12 @@ private struct CommitRow: View {
                 Spacer(minLength: 8)
                 Text(item.commit.relativeAge)
                     .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
                     .frame(width: 36, alignment: .trailing)
                     .help(item.commit.date)
                 Text(item.commit.author)
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             .padding(.horizontal, 4)

@@ -61,7 +61,7 @@ your shell `git` has applies here too.
 **Build from source:**
 
 ```bash
-git clone https://github.com/<your-fork>/GitChop.git
+git clone https://github.com/bendansby/GitChop.git
 cd GitChop
 bash scripts/build-app.sh        # build, ad-hoc sign, install to /Applications, launch
 ```

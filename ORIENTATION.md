@@ -7,8 +7,12 @@ Tower / Fork / GitHub Desktop is **split-commit-in-window** — the `edit`
 verb done as a hunk-staging UI rather than a `--continue` dance. Magit
 has had this on Emacs for 15 years; nothing else on macOS does.
 
-Currently at **0.2 (preview)**. macOS 14+. Bundle ID
-`com.bendansby.GitChop`. Not yet shipped publicly; no Sparkle feed yet.
+Currently at **1.0**. macOS 14+. Bundle ID `com.bendansby.GitChop`.
+Notarized DMG at
+[bendansby.com/apps/gitchop](https://bendansby.com/apps/gitchop), live
+Sparkle feed at `bendansby.com/apps/gitchop/appcast.xml`. Source is
+MIT-licensed (`LICENSE` at the repo root) — `README.md` is the public
+face; this file is for contributors.
 
 If you want to know *why* a thing is the way it is, read `DECISIONS.md`.
 If you want to know *what's next*, read `BACKLOG.md`.
@@ -55,45 +59,84 @@ not the outer one.
 
 ```
 GitChop/
-  Package.swift                — SwiftPM, single executable target
+  Package.swift                — SwiftPM, single executable target,
+                                 Sparkle binary XCFramework dep + rpath
+                                 linker flag for Contents/Frameworks
+  Package.resolved             — pinned Sparkle version
   GitChop.entitlements         — empty; intentionally NOT sandboxed
                                  (sandbox blocks subprocess + arbitrary FS)
-  Icon.png                     — generated from scripts/render-icon.py
+  Icon.png                     — 1024² source, picked up by build-app.sh
+  Icon.icon/                   — Icon Composer source bundle (macOS 26)
+  LICENSE                      — MIT
+  README.md                    — public-facing intro
   Resources/
-    Info.plist                 — bundle identity, version
+    Info.plist                 — bundle identity, version, Sparkle keys
+                                 (SUFeedURL, SUPublicEDKey, auto-check)
   Sources/GitChop/
-    GitChopApp.swift           — @main scene, Open-Repo / Close-Tab commands
-    Workspace.swift            — top-level state: N RebaseSessions + persistence
-    RebaseSession.swift        — per-repo: plan, diff, status, isApplying
-    RebaseEngine.swift         — load + apply + pause-loop + split execution
-    GitRunner.swift            — Process wrapper around /usr/bin/git
-                                 (run, runWithStdin)
-    HunkParser.swift           — unified-diff → ParsedDiff (files + hunks),
-                                 + reassemble back into a unified diff
+    GitChopApp.swift           — @main scene, Settings scene, command
+                                 menu (Open / Close Tab / Check for
+                                 Updates), SPUStandardUpdaterController
+    MainWindowAccessor.swift   — captures the document NSWindow into a
+                                 weak singleton so ⌘W can route Close
+                                 Tab vs. Close Window correctly
+    Workspace.swift            — top-level state: N RebaseSessions,
+                                 persistence, pendingClose dialog
+    RebaseSession.swift        — per-repo: plan, diff, status (computed),
+                                 isApplying, hunkCount cache, conflict
+                                 + remaining-todo state
+    RebaseEngine.swift         — load + apply + pause-loop + split exec;
+                                 ActiveRebase carries env / backup /
+                                 temp files across continue-skip-abort
+    GitRunner.swift            — Process wrapper; resolves git via
+                                 Preferences.resolvedGitPath()
+    HunkParser.swift           — unified-diff → ParsedDiff; content-
+                                 stable hunk IDs (file + +/- body lines)
     PlanInspector.swift        — squash/fixup attach-relationship math
     Models.swift               — Verb, Commit, PlanItem, EditPlan,
-                                 RebaseOutcome
-    ContentView.swift          — top-level layout, toolbar, sheet plumbing
-    TabStripView.swift         — Finder-style tab strip (whole pill is hit area)
-    CommitListView.swift       — drag-reorder, verb chips, attach indicators
-    DiffPaneView.swift         — `git show` pane: word-wrap + line numbers,
-                                 structural color
+                                 RebaseOutcome (incl. .conflicted case)
+    Preferences.swift          — @MainActor singleton + nonisolated
+                                 static resolvedGitPath; default depth,
+                                 git path, editor mode
+    PreferencesView.swift      — Settings scene's TabView (General /
+                                 Git / Editor)
+    ContentView.swift          — top-level layout, toolbar, sheet
+                                 plumbing (Confirm / Result / Split /
+                                 Reword / Conflict)
+    TabStripView.swift         — Finder-style tab strip; auto-hides
+                                 when only one repo is open
+    CommitListView.swift       — drag-reorder, verb chips, ghost rows
+                                 for split-buckets, chronology column
+    DiffPaneView.swift         — `git show` pane: word-wrap + line
+                                 numbers, structural color
     RebaseConfirmSheet.swift   — pre-Apply confirmation, plan preview
     RebaseResultSheet.swift    — post-Apply result, copyable backup ref
     SplitCommitSheet.swift     — split-commit hunk-assignment UI
+    RewordSheet.swift          — full-message edit modal (subject + body)
+    ConflictSheet.swift        — paused-on-conflict sheet: file list +
+                                 remaining-todo reorder list
   Sample Project/
     init.sh                    — generates a fresh 26-commit demo repo
     repo/                      — generated, gitignored
   scripts/
-    build-app.sh               — local dev: build, ad-hoc sign, install,
+    build-app.sh               — local dev: build, sign (hardened
+                                 runtime + timestamp only when a real
+                                 Developer ID is passed), install,
                                  lsregister, retry-launch until pgrep
-    render-icon.py             — regenerates Icon.png (Pillow)
+    release.sh                 — full ship: notarize app → DMG →
+                                 notarize DMG → render notes → signed
+                                 appcast → upload (FTP) → MD5 verify
+    render-og.py               — regenerates Showcase/og-gitchop.png
+    render-icon.py             — Pillow icon-generator (legacy)
   release-notes/
     _layout.html               — Sparkle-WebView-friendly note layout
-    0.1.0.html                 — preview release notes (body fragment)
+    0.1.0.html / 0.3.0.html /
+    1.0.0.html                 — release-notes fragments
+  build/sparkle-tools/         — generate_appcast, sign_update,
+                                 generate_keys, BinaryDelta — vendored
+                                 from the Sparkle release for release.sh
   ORIENTATION.md               — this file
   DECISIONS.md                 — why-we-did-it-this-way log
-  BACKLOG.md                   — v0.3 and beyond
+  BACKLOG.md                   — what's next
 ```
 
 ---

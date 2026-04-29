@@ -1,170 +1,122 @@
 # GitChop — backlog
 
-Tracked items for v0.3 and beyond. Roughly priority-ordered within
+What's queued up for v1.x and beyond. Roughly priority-ordered within
 each section. "Cost" is rough person-hours; "value" is gut-feel
 ranking against the existing feature set.
 
 ---
 
-## v0.3 — to ship
+## Shipped in 1.0
 
-These are the missing pieces that block a real launch / Show HN.
-Most are visible to users on day one; that's what raises the bar.
+Most of the original v0.3 / v0.5 backlog is in the released app:
 
-### Reword inline   ·   value: high   ·   cost: 4–6h
-
-Click a commit's subject in the list to edit it inline. The chip
-auto-promotes to `reword`. At apply time, the engine generates a
-per-commit message map keyed by full SHA; `GIT_EDITOR` points at a
-small helper script that reads its arg (the commit-message file git
-provides) and replaces the contents with the user's new subject for
-that SHA. Helper looks like:
-
-```bash
-#!/bin/bash
-# args: $1 = path to git's COMMIT_EDITMSG-style file
-# env GITCHOP_REWORD_MAP_FILE = path to our SHA→subject map
-# env GIT_REBASE_TODO_LINE_INDEX or similar to tell us which commit
-sha=$(awk '{print $2}' "$GIT_REBASE_TODO" | sed -n "${POS}p")
-new=$(jq -r ".\"$sha\"" "$GITCHOP_REWORD_MAP_FILE")
-echo "$new" > "$1"
-```
-
-The trick is identifying which reword we're doing. Options:
-- Track via `git status` / `.git/rebase-merge/stopped-sha` pre-edit
-- Use a stateful counter file that the helper increments
-
-This is simpler than it sounds; ~half a day of work.
-
-### Conflict pause UI   ·   value: high   ·   cost: 1–2 days
-
-Currently if `git rebase --continue` fails (likely a conflict),
-we abort and roll back. That's safe but means real-world rebases
-where conflicts happen — > 50 % on nontrivial chops — bounce off
-the tool. Need:
-
-1. Detect conflict state: `.git/rebase-merge/` exists AND
-   `git diff --name-only --diff-filter=U` returns paths
-2. Surface a sheet listing conflicted files with three actions:
-   - "Open in mergetool" → spawn `git mergetool`
-   - "Skip this commit" → `git rebase --skip`
-   - "Abort the whole rebase" → `git rebase --abort` + restore
-3. After the user resolves, GitChop polls for a clean working tree
-   and offers "Continue" → `git rebase --continue`
-4. Loop back into the existing pause loop in `RebaseEngine.apply`
-
-The hard part is the polling story — we don't want to busy-loop.
-A `DispatchSourceFileSystemObject` watching `.git/rebase-merge/`
-would let us react to git state changes without timers.
-
-### Edge cases in hunk overlap   ·   value: medium   ·   cost: ~~1 day~~ DONE
-
-Was: parse-once-at-apply-time meant upstream rebase steps that shifted
-context lines (or earlier buckets in the loop modifying the same file)
-broke later bucket applies. Hunk IDs included the `@@` header so any
-line-number shift turned bucket assignments into ID misses.
-
-Fixed in v0.3:
-- `Hunk.id` is now `file::<+/- body lines>` (no header, no context).
-  Stable across re-parses regardless of upstream line-number drift.
-- `runSplit` re-parses `git diff HEAD` before each bucket and
-  reassembles using live hunks, so apply always sees current line
-  numbers. Bucket 2's hunks are matched against the post-bucket-1
-  state, etc.
-
-Remaining failure mode: when an upstream rebase step actually
-*changed* a context line's content (not just shifted its position),
-the hunk's removal lines won't match the live file and the apply
-fails. That's a true 3-way-merge problem; today we still roll back
-on it. Future work: surface as a conflict and let the user resolve.
-
-### Plan pre-validation   ·   value: medium   ·   cost: 2h
-
-Refuse to Apply if:
-- A `squash` or `fixup` chain doesn't trace back to a `pick` or
-  `edit` (currently we let git error and surface in the result sheet)
-- An `edit` row has no `EditPlan` AND has squash/fixup chained below
-  it (the chained verbs would attach to whatever the edit produces,
-  which without a plan is just the original commit — semantically
-  fine, but the user probably forgot to configure)
-- Empty plan (every row drop): warn that it's destructive
-
-The warnings can be inline in the confirm sheet, with a "Apply
-anyway" button for the rare cases where the user knows better.
-
-### Custom range picker   ·   value: low–medium   ·   cost: ~~4h~~ DONE
-
-Right-click any commit in the list → "Use as base". The clicked
-commit becomes the rebase base (excluded from the plan, matching
-`git rebase -i <sha>`'s semantics) and everything newer than it
-becomes the plan. The header's count pill switches to "N commits
-from abc1234" so the pinned base is visible at a glance, and the
-depth menu collapses to a single "Switch to depth-based loading"
-item until the user reverts.
-
-Not done: the "Pick base…" search sheet from the original entry —
-deferred to v0.4 since right-click-on-row plus the existing depth
-"All" option covers the realistic flow (load all, scroll, right-click).
+- **Reword inline** — modal sheet preloaded with the commit's full
+  message; engine writes per-SHA scratch files and points
+  `$GIT_EDITOR` at a tiny helper.
+- **Conflict pause UI** — sheet listing unmerged files with Open /
+  Reveal, plus Continue / Skip / Abort actions. Mid-rebase reorder of
+  the still-pending commits is supported from the same sheet.
+- **Split-bucket re-parse** — runSplit re-parses the live diff before
+  each bucket and reassembles using current hunks. Hunk IDs are
+  content-stable (file + +/- body lines) so they survive upstream
+  line-number drift.
+- **Custom range picker** — right-click any commit → *Use as base*.
+- **Sparkle feed** — `bendansby.com/apps/gitchop/appcast.xml`, signed
+  with the workspace EdDSA key. Auto-update via `Check for Updates…`.
+- **Showcase site page + docs** at `bendansby.com/apps/gitchop`.
+- **Open-source release** — MIT, source at the repo root.
+- **Reset toolbar button**, **chronology column**, **Preferences
+  window** (default depth / git path / editor mode), **stale-rebase
+  recovery**, **empty-cherry-pick auto-skip**, **tab-close
+  confirmation** — all 1.0.
 
 ---
 
-## v0.4 — polish + breadth
+## Next up — v1.1 candidates
 
-Once v0.3 is out and stable.
+### Plan pre-validation   ·   value: medium   ·   cost: 2–3h
 
-### Multi-bucket drag/drop
+Refuse to Apply (or warn inline in the confirm sheet) when:
+- A `squash` / `fixup` chain doesn't trace back to a `pick` / `edit`
+  / `reword` (currently we let git error and surface in the result
+  sheet).
+- An `edit` row has no `EditPlan` AND has squash/fixup chained below
+  it — the chained verbs would attach to whatever the edit produces,
+  which without a plan is just the original commit (semantically
+  fine, but probably forgot to configure).
+- Every-row-drop: warn that it's destructive.
 
-The split sheet's hunk-to-bucket assignment is a Menu picker today.
-Drag-and-drop hunks onto bucket cards would be more discoverable
-and faster for big splits. SwiftUI's `Draggable`/`DropDestination`
-since macOS 14 makes this less painful than it used to be.
+The 1-hunk-edit case is already handled (chip menu disables the entry
+with "Not available — commit has only 1 hunk"); this generalizes the
+pattern.
 
-### Bucket reorder
+### Multi-bucket drag/drop in the split sheet   ·   value: medium   ·   cost: 4–6h
+
+Hunk-to-bucket assignment is a chevron menu today. Drag-and-drop
+onto bucket cards is more discoverable for big splits. SwiftUI's
+`Draggable` / `DropDestination` since macOS 14 makes this less
+painful than it used to be.
+
+### Hunk preview in the split sheet   ·   value: medium   ·   cost: 1d
+
+Each hunk row is just the file + header + line counts. A
+disclosure-arrow per row that expands the diff body (same structural
+color the diff pane uses) would let users make informed bucket
+assignments without flipping back to the main diff pane.
+
+### Bucket reorder   ·   value: low   ·   cost: 2h
 
 The buckets list in the split sheet is display-order = apply-order.
-Right now there's no way to reorder buckets after assignment. Add
-drag-reorder (or up/down buttons).
+Drag-reorder (or up/down buttons) so users can sequence the resulting
+commits. Most splits don't care, but the affordance is missing.
 
-### Hunk preview
+### Native window tabs   ·   value: medium   ·   cost: 1d
 
-In the split sheet, each hunk row is just the file + header + line
-counts. No way to actually see the hunk content from the sheet. A
-disclosure-arrow per row that expands to show the diff (with the
-same structural color the diff pane uses) would let users make
-informed bucket assignments without flipping back to the main
-diff pane.
+Replace the custom tab strip with macOS's native window-tab
+mechanism. Means restructuring from `WindowGroup → Workspace → N
+sessions` to `WindowGroup → one session per window`, with system
+tabbing merging windows automatically. Wins: drag tabs out into
+windows, system ⌘⇧] / ⌘⇧[ navigation, less custom code. Cost: real
+refactor of state ownership + persistence, not just a styling swap.
 
-### Cross-vendor PR viewer
+### Mergetool integration in the conflict sheet   ·   value: low–medium   ·   cost: 4–6h
 
-Long-shot: pull PR review surface (comments, status checks, requested
-reviewers) into a sidebar of the diff pane. Works for GitHub +
-GitLab + Gitea via their respective APIs, gated by configured PATs.
-Massively expands the tool's value but also moves us toward "yet
-another git client" rather than "the rebase one." Probably v1 or
-later.
+Today's "Open" launches the configured editor; the user resolves and
+clicks Refresh / Continue. Adding a "Merge with mergetool…" action
+that spawns `git mergetool` and refreshes when it returns would save
+a step for users who already use Kaleidoscope, Beyond Compare, etc.
+
+### File-system watcher during conflict resolution   ·   value: low   ·   cost: 2h
+
+`DispatchSourceFileSystemObject` on `.git/rebase-merge/` and the
+unmerged paths. Removes the manual Refresh tap — the conflict sheet
+auto-updates as the user saves resolutions.
 
 ---
 
-## v0.5 — distribution
+## Ideas — uncommitted
 
-### Sparkle feed
+Things worth thinking about but not on a roadmap:
 
-Once we ship publicly, set up the appcast at
-`bendansby.com/apps/gitchop/appcast.xml` (mirroring the other apps
-in this workspace) and wire up `scripts/release.sh` modeled on the
-unified ship pipeline doc at `Mac Apps/RELEASE.md`.
-
-### Showcase site page
-
-Add `gitchop.html` + assets to `Showcase/` and link it from
-`Showcase/index.html`. Marketing copy + screenshot grid + download
-button. Match the visual style of the other apps' showcase pages.
-
-### Open source the repo
-
-The pitch is much stronger as "solo dev shipped a polished native
-git tool — code's here." Closed source caps the HN ceiling. Decide
-license before launch (likely MIT or Apache 2.0).
+- **Autosquash recognition.** When commits have `fixup!` / `squash!`
+  prefixes matching another commit's subject, pre-mark them with the
+  right verb on load. `git rebase --autosquash` does this client-side
+  already; doing it in the UI lets users see the rearrangement before
+  applying.
+- **Verb keyboard shortcuts.** `1`–`6` to set the selected row's
+  verb. Magit-style accelerator for keyboard-driven users.
+- **Plan templates.** "Fold all WIP commits into the previous one,"
+  "Pull one commit out and pause for split," etc. Could be a
+  *Suggest…* menu.
+- **Diff-color intensity toggle.** Some users find the green/red
+  fill on +/- lines too saturated. Could expose a "structural color
+  on/off" or "intensity" knob in the diff pane header.
+- **Cross-vendor PR viewer.** Pull PR review surface (comments,
+  status checks, requested reviewers) into a diff-pane sidebar. Works
+  for GitHub / GitLab / Gitea via APIs, gated by configured PATs.
+  Massively expands the tool's value but also moves toward "yet
+  another git client" rather than "the rebase one." Long-shot for
+  v1.x.
 
 ---
 
@@ -173,39 +125,39 @@ license before launch (likely MIT or Apache 2.0).
 Things that have come up and been deliberately rejected:
 
 - **Rebase --root support.** `git rebase --root -i` lets you rebase
-  including the initial commit. Adds engine complexity (no "base"
-  to pivot on, different TODO format) for an extremely rare use
-  case. Not worth the code path.
+  including the initial commit. Adds engine complexity (no "base" to
+  pivot on, different TODO format) for an extremely rare use case.
+  Not worth the code path.
 - **Non-Mac platform.** Ship on Mac first; cross-platform is a
   3-month detour for a fraction of the user base.
 - **Replace the diff pane with a full editor.** Tempting, but every
   step toward "code editor" is a step away from "rebase tool." Keep
   the diff pane read-only; let the user edit code in their actual
-  editor.
+  editor (which Preferences now lets them launch from the conflict
+  sheet).
 - **Live commit-graph visualization.** Beautiful but not what users
   reach for during a rebase. Would compete for window space with
   the rebase plan, which IS the focus.
+- **In-app branch switcher.** GitChop reads whichever branch is
+  currently checked out — that's enough. Branch management is well
+  served by other Mac git tools (Tower, Fork, Xcode, the terminal),
+  and adding it here would import a thicket of dirty-tree / detached-
+  HEAD / no-upstream edge cases that don't pay back in the
+  rebase-only lane.
 
 ---
 
-## Ideas to maybe pull in
+## Hardening / known limitations
 
-Things worth thinking about but not committed:
-
-- **Autosquash recognition.** When the user has commits with
-  `fixup!` or `squash!` prefixes (matching another commit's subject),
-  pre-mark them with the right verb. `git rebase --autosquash`
-  already does this, but doing it client-side lets users see the
-  re-arrangement before applying.
-- **Shortcut keys for verb assignment.** `1`–`5` to set the
-  selected row's verb to pick / edit / squash / fixup / drop. Magit
-  has this; it's a power-user accelerator that keyboard-driven
-  users would find immediately.
-- **Plan templates.** Common rebase shapes: "fold all WIP commits
-  into the previous one" (every fixup-flagged commit → fixup), "pull
-  one commit out and pause for split" (mark `edit` on the selected
-  row). Could be a "Suggest…" menu.
-- **Diff coloring intensity toggle.** Some users find the green/red
-  fill on +/- lines too saturated. Could expose a "structural color
-  on/off" or "intensity" knob in the diff pane header alongside
-  word-wrap and line numbers.
+- **Split during rebase, true context drift.** When an upstream
+  rebase step actually changes a context line's *content* (not just
+  shifts its position), the bucket's hunk has stale removal lines and
+  `git apply` rejects it. Today the engine rolls back. The proper
+  fix is 3-way merging the bucket's intent against the live tree —
+  significantly more work than the line-number-drift fix that 1.0
+  shipped. Surface as a conflict so the user can resolve, rather
+  than dropping the whole split.
+- **Backup-ref retention.** `refs/gitchop-backup/<timestamp>` accumulates
+  forever today. A "Delete backups older than N days" knob in
+  Preferences (auto-runnable on launch) is a small addition; just
+  hasn't been built.

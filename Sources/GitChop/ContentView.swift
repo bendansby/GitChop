@@ -98,6 +98,33 @@ private struct SplitSheetHost: ViewModifier {
     }
 }
 
+/// Hosts the conflict-resolution sheet. Driven by the session's
+/// `activeRebase` — when that's non-nil, a rebase is paused on
+/// conflicts and the sheet stays up across continue/skip cycles
+/// (which may set it again if the next commit also conflicts).
+private struct ConflictSheetHost: ViewModifier {
+    @ObservedObject var session: RebaseSession
+
+    func body(content: Content) -> some View {
+        content.sheet(
+            isPresented: Binding(
+                get: { session.activeRebase != nil },
+                // Sheet can't be dismissed by tapping outside — the user
+                // must explicitly Continue / Skip / Abort. The setter
+                // is a no-op (we ignore false from SwiftUI's machinery).
+                set: { _ in }
+            )
+        ) {
+            ConflictSheet(
+                session: session,
+                onContinue: { Task { await session.continueAfterConflict() } },
+                onSkip: { Task { await session.skipConflictedCommit() } },
+                onAbort: { Task { await session.abortConflictedRebase() } }
+            )
+        }
+    }
+}
+
 /// Hosts the reword sheet for the active session. Same observer
 /// pattern as `SplitSheetHost` for the same reason.
 private struct RewordSheetHost: ViewModifier {
@@ -169,7 +196,15 @@ struct ContentView: View {
                         Task {
                             try? await Task.sleep(nanoseconds: 250_000_000)
                             await session.apply()
-                            if session.lastOutcome != nil { showOutcome = true }
+                            // Don't show the result sheet if the rebase
+                            // paused on a conflict — the conflict sheet
+                            // takes over until the user resolves.
+                            if let outcome = session.lastOutcome,
+                               case .conflicted = outcome.kind {
+                                // ConflictSheetHost handles it.
+                            } else if session.lastOutcome != nil {
+                                showOutcome = true
+                            }
                         }
                     },
                     onCancel: { showConfirm = false }
@@ -204,6 +239,7 @@ struct ContentView: View {
         .environmentObject(session)
         .modifier(SplitSheetHost(session: session))
         .modifier(RewordSheetHost(session: session))
+        .modifier(ConflictSheetHost(session: session))
         // Tag with session.id so SwiftUI rebuilds the subtree when the
         // active tab changes, instead of re-using the same view tree
         // and confusing onAppear/state.

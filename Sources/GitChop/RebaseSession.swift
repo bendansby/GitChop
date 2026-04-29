@@ -103,6 +103,7 @@ final class RebaseSession: ObservableObject, Identifiable {
             status = "Loaded \(plan.count) commit\(plan.count == 1 ? "" : "s")\(suffix)"
             recomputeChangedFlag()
             loadDiffForSelection()
+            loadHunkCountsInBackground()
         } catch {
             status = error.localizedDescription
             plan = []
@@ -112,7 +113,41 @@ final class RebaseSession: ObservableObject, Identifiable {
             selectedID = nil
             diffText = ""
             hasChanges = false
+            hunkCounts = [:]
         }
+    }
+
+    /// Populate `hunkCounts` for every commit currently in the plan.
+    /// Runs off the main actor so the UI stays responsive while the
+    /// per-commit `git diff-tree` calls fan out, then hops back to
+    /// publish the result.
+    private func loadHunkCountsInBackground() {
+        guard let repo = repoURL else { return }
+        let shas = plan.map(\.commit.fullHash)
+        // Snapshot of the plan's identity so a stale background run
+        // doesn't overwrite a fresher load's counts.
+        let planSnapshotID = shas
+        Task.detached(priority: .utility) {
+            let engine = RebaseEngine(runner: GitRunner(cwd: repo))
+            var collected: [String: Int] = [:]
+            for sha in shas {
+                collected[sha] = engine.hunkCount(for: sha)
+            }
+            let finalCounts = collected
+            await MainActor.run {
+                // Drop the result if the plan changed under us during
+                // the background run (reload, depth change, etc.).
+                guard self.plan.map(\.commit.fullHash) == planSnapshotID else { return }
+                self.hunkCounts = finalCounts
+            }
+        }
+    }
+
+    /// Cached hunk count for the commit, or nil if not yet loaded.
+    /// Nil should be treated as "unknown — assume any verb is OK"
+    /// so the chip menu doesn't disable rows during the brief load.
+    func cachedHunkCount(for id: String) -> Int? {
+        hunkCounts[id]
     }
 
     /// Reload the current repo at a new depth. Discards in-progress
@@ -197,6 +232,18 @@ final class RebaseSession: ObservableObject, Identifiable {
     }
 
     func cancelReword() {
+        // If the user opened the sheet via "promote to reword" but
+        // dismissed without saving any new message, the .reword verb
+        // would leave the row marked but accomplish nothing at apply
+        // time. Revert to .pick in that case so the row matches what
+        // will actually happen.
+        if let id = rewordSheetCommitID,
+           let idx = plan.firstIndex(where: { $0.id == id }),
+           plan[idx].verb == .reword,
+           plan[idx].newMessage == nil {
+            plan[idx].verb = .pick
+            recomputeChangedFlag()
+        }
         rewordSheetCommitID = nil
     }
 
@@ -245,6 +292,25 @@ final class RebaseSession: ObservableObject, Identifiable {
 
     // MARK: - Apply
 
+    /// In-flight rebase state when paused on a conflict. Carries the
+    /// engine's ActiveRebase so continue/skip/abort can resume the loop
+    /// without rebuilding env/temp files. Nil whenever no rebase is
+    /// paused waiting for user resolution.
+    @Published var activeRebase: RebaseEngine.ActiveRebase?
+
+    /// Files git currently considers unmerged. Mirrors the conflict
+    /// outcome's file list and is refreshed by the conflict sheet's
+    /// Refresh button so the user's "did I resolve everything?" view is
+    /// always live.
+    @Published var conflictedFiles: [String] = []
+
+    /// Cached hunk counts keyed by full SHA. Populated lazily after
+    /// each plan load via a background task running one `git diff-tree`
+    /// per commit. Used by the verb chip menu to disable the `edit`
+    /// option on commits with fewer than 2 hunks (splitting can't
+    /// produce more commits than there are hunks).
+    @Published var hunkCounts: [String: Int] = [:]
+
     func apply() async {
         guard let repo = repoURL, !plan.isEmpty, !isApplying else { return }
         isApplying = true
@@ -252,22 +318,93 @@ final class RebaseSession: ObservableObject, Identifiable {
 
         let engine = RebaseEngine(runner: GitRunner(cwd: repo))
         do {
-            let outcome = try engine.apply(plan: plan, base: baseHash)
-            lastOutcome = outcome
-            switch outcome.kind {
-            case .success:
-                status = "Rebase applied. Backup: \(outcome.backupRef)"
-                // Reload from the new HEAD so the list reflects the new history.
-                load(repo: repo)
-            case .failed:
-                status = "Rebase failed. Aborting and restoring from backup."
-                try? engine.abort()
-                try? engine.restore(from: outcome.backupRef)
-                load(repo: repo)
-            }
+            let (outcome, active) = try engine.apply(plan: plan, base: baseHash)
+            handleOutcome(outcome, active: active, repo: repo, engine: engine)
         } catch {
             status = "Apply failed: \(error.localizedDescription)"
             lastOutcome = RebaseOutcome(kind: .failed, log: error.localizedDescription, backupRef: "")
+        }
+    }
+
+    /// Resume a conflicted rebase after the user resolved the files.
+    /// Engine runs `git rebase --continue` then re-enters the pause
+    /// loop. Resulting outcome may itself be conflicted (next commit
+    /// also conflicts), success, or failed.
+    func continueAfterConflict() async {
+        guard let repo = repoURL, let active = activeRebase, !isApplying else { return }
+        isApplying = true
+        defer { isApplying = false }
+        let engine = RebaseEngine(runner: GitRunner(cwd: repo))
+        do {
+            let (outcome, next) = try engine.continueAfterConflict(plan: plan, active: active)
+            handleOutcome(outcome, active: next, repo: repo, engine: engine)
+        } catch {
+            status = "Continue failed: \(error.localizedDescription)"
+            lastOutcome = RebaseOutcome(kind: .failed, log: error.localizedDescription, backupRef: active.backupRef)
+        }
+    }
+
+    /// `git rebase --skip`: drop the conflicting commit and continue
+    /// with the rest of the plan. Same outcome shape as continue.
+    func skipConflictedCommit() async {
+        guard let repo = repoURL, let active = activeRebase, !isApplying else { return }
+        isApplying = true
+        defer { isApplying = false }
+        let engine = RebaseEngine(runner: GitRunner(cwd: repo))
+        do {
+            let (outcome, next) = try engine.skipConflict(plan: plan, active: active)
+            handleOutcome(outcome, active: next, repo: repo, engine: engine)
+        } catch {
+            status = "Skip failed: \(error.localizedDescription)"
+            lastOutcome = RebaseOutcome(kind: .failed, log: error.localizedDescription, backupRef: active.backupRef)
+        }
+    }
+
+    /// User-driven `git rebase --abort` + restore from backup ref.
+    /// Always terminal; clears active state and reloads.
+    func abortConflictedRebase() async {
+        guard let repo = repoURL, let active = activeRebase else { return }
+        isApplying = true
+        defer { isApplying = false }
+        let engine = RebaseEngine(runner: GitRunner(cwd: repo))
+        let outcome = engine.abortConflict(active: active)
+        handleOutcome(outcome, active: nil, repo: repo, engine: engine)
+    }
+
+    /// Re-poll git for the current set of unmerged paths. Bound to the
+    /// conflict sheet's Refresh button.
+    func refreshConflictedFiles() {
+        guard let repo = repoURL, activeRebase != nil else { return }
+        let engine = RebaseEngine(runner: GitRunner(cwd: repo))
+        conflictedFiles = engine.unmergedFiles()
+    }
+
+    private func handleOutcome(
+        _ outcome: RebaseOutcome,
+        active: RebaseEngine.ActiveRebase?,
+        repo: URL,
+        engine: RebaseEngine
+    ) {
+        lastOutcome = outcome
+        switch outcome.kind {
+        case .success:
+            activeRebase = nil
+            conflictedFiles = []
+            status = "Rebase applied. Backup: \(outcome.backupRef)"
+            load(repo: repo)
+        case .failed:
+            activeRebase = nil
+            conflictedFiles = []
+            status = "Rebase failed. Aborting and restoring from backup."
+            // Belt-and-suspenders: if the engine left a rebase in flight
+            // on a non-conflict failure, abort + restore here.
+            try? engine.abort()
+            try? engine.restore(from: outcome.backupRef)
+            load(repo: repo)
+        case .conflicted(let files):
+            activeRebase = active
+            conflictedFiles = files
+            status = "Conflict in \(files.count) file\(files.count == 1 ? "" : "s") — resolve and continue."
         }
     }
 }

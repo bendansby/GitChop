@@ -84,8 +84,19 @@ struct RewordSheet: View {
             Button("Save") { onSave(text, originalMessage) }
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
-                .disabled(!loaded)
+                .disabled(!loaded || !hasRealChange)
         }
+    }
+
+    /// True when Save would actually change the commit's message.
+    /// Empty / whitespace-only or identical-to-original both count as
+    /// "no change" — saving in those cases would mark the row reword
+    /// without doing anything at apply time, which the session also
+    /// guards against on cancel.
+    private var hasRealChange: Bool {
+        let trimmedNew = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedOrig = originalMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !trimmedNew.isEmpty && trimmedNew != trimmedOrig
     }
 
     @ViewBuilder

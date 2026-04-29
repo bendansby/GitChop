@@ -237,12 +237,11 @@ struct SplitCommitSheet: View {
         .fixedSize()
     }
 
-    /// Index → color mapping. Cycles through a small palette so each
-    /// bucket has a distinct visual identity shared between the hunk
-    /// row's assignment dot and the bucket card's number badge.
+    /// Bridge to the shared palette on EditPlan so the split sheet,
+    /// hunk-assignment label, and the commit-list ghost rows all use
+    /// the same color per bucket index.
     private func bucketColor(_ idx: Int) -> Color {
-        let palette: [Color] = [.blue, .purple, .orange, .pink, .teal, .indigo]
-        return palette[idx % palette.count]
+        EditPlan.bucketColor(idx)
     }
 
     // MARK: - Buckets column

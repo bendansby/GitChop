@@ -84,6 +84,15 @@ struct EditPlan: Hashable, Codable {
         /// is irrelevant.
         var hunkIDs: Set<String> = []
     }
+
+    /// Visual identity for the bucket at index `idx`. Cycles through a
+    /// fixed palette so each bucket has a distinct color shared across
+    /// the split sheet's bucket cards, the hunk-row dot, and the ghost
+    /// rows that preview this bucket in the commit list.
+    static func bucketColor(_ idx: Int) -> Color {
+        let palette: [Color] = [.blue, .purple, .orange, .pink, .teal, .indigo]
+        return palette[idx % palette.count]
+    }
 }
 
 /// One commit loaded from `git log`. Hash is short, `fullHash` is the SHA-1.
@@ -128,9 +137,20 @@ struct PlanItem: Identifiable, Hashable {
     }
 }
 
-/// Result returned from a rebase attempt — drives the post-Apply alert.
+/// Result returned from a rebase attempt — drives the post-Apply alert
+/// or the conflict-resolution sheet.
+///
+/// `.conflicted` means git stopped on merge conflicts and `.git/rebase-merge/`
+/// is still around. The caller is expected to surface the listed files
+/// to the user, who then resolves them and asks GitChop to continue
+/// (or skip the commit, or abort the whole thing). The corresponding
+/// `ActiveRebase` carries the state needed to resume.
 struct RebaseOutcome {
-    enum Kind { case success, failed }
+    enum Kind: Equatable {
+        case success
+        case failed
+        case conflicted(files: [String])
+    }
     let kind: Kind
     let log: String
     let backupRef: String

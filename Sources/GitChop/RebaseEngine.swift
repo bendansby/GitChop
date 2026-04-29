@@ -110,9 +110,55 @@ struct RebaseEngine {
         return result.stdout
     }
 
+    /// Hunk count for a single commit. Used to decide whether the
+    /// `edit` verb is meaningful on a row (needs ≥ 2 hunks to actually
+    /// split into multiple commits). `--root` makes this work for the
+    /// initial commit too (diff against the empty tree).
+    func hunkCount(for sha: String) -> Int {
+        guard let result = try? runner.run([
+            "diff-tree", "--no-commit-id", "-p", "--no-color", "--root", sha
+        ]) else { return 0 }
+        guard result.isSuccess else { return 0 }
+        return result.stdout
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { $0.hasPrefix("@@ ") }
+            .count
+    }
+
     // MARK: - Apply
 
-    func apply(plan: [PlanItem], base: String) throws -> RebaseOutcome {
+    /// Mutable state for an in-flight rebase. Carries the env we built
+    /// at start (so continues see the same GIT_EDITOR / reword wiring),
+    /// the backup ref, the temp files we own, and the accumulated log.
+    /// `cleanup()` is called by the engine on terminal outcomes
+    /// (success / failed / aborted) — not on `.conflicted`, which keeps
+    /// the rebase alive for user resolution.
+    final class ActiveRebase {
+        let env: [String: String]
+        let backupRef: String
+        let todoFile: URL
+        let rewordDir: URL?
+        let rewordHelper: URL?
+        var log: String
+
+        init(env: [String: String], backupRef: String, todoFile: URL, rewordDir: URL?, rewordHelper: URL?, log: String) {
+            self.env = env
+            self.backupRef = backupRef
+            self.todoFile = todoFile
+            self.rewordDir = rewordDir
+            self.rewordHelper = rewordHelper
+            self.log = log
+        }
+
+        func cleanup() {
+            let fm = FileManager.default
+            try? fm.removeItem(at: todoFile)
+            if let d = rewordDir { try? fm.removeItem(at: d) }
+            if let h = rewordHelper { try? fm.removeItem(at: h) }
+        }
+    }
+
+    func apply(plan: [PlanItem], base: String) throws -> (RebaseOutcome, ActiveRebase?) {
         // 1. Backup ref so the pre-rebase tip is recoverable.
         let timestamp = Self.timestampString()
         let backupRef = "refs/gitchop-backup/\(timestamp)"
@@ -134,7 +180,10 @@ struct RebaseEngine {
         let todoFile = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("gitchop-todo-\(UUID().uuidString).txt")
         try todo.write(to: todoFile, atomically: true, encoding: .utf8)
-        defer { try? FileManager.default.removeItem(at: todoFile) }
+        // No defer-cleanup of todoFile here: the file lifetime is owned
+        // by the returned ActiveRebase, which cleans up on terminal
+        // outcomes (success / failed / aborted). A `.conflicted` outcome
+        // keeps the rebase alive across user resolution and continues.
 
         // 3. The cp trick: GIT_SEQUENCE_EDITOR is invoked as
         //    `<editor> <file>`, so `cp /our/todo.txt <file>` overwrites
@@ -213,37 +262,85 @@ struct RebaseEngine {
             env["GIT_EDITOR"] = helperURL.path
             env["GITCHOP_REWORD_DIR"] = dirURL.path
         }
-        defer {
-            if let d = rewordDir { try? FileManager.default.removeItem(at: d) }
-            if let f = rewordHelperFile { try? FileManager.default.removeItem(at: f) }
-        }
+        // (No defer-cleanup; lifetime owned by the ActiveRebase below.)
 
-        var combinedLog = ""
+        let active = ActiveRebase(
+            env: env,
+            backupRef: backupRef,
+            todoFile: todoFile,
+            rewordDir: rewordDir,
+            rewordHelper: rewordHelperFile,
+            log: ""
+        )
 
         // 4. Start the rebase. `--no-autostash` so we never silently
         //    stash the user's working-tree changes; if anything's
         //    uncommitted, git refuses cleanly instead of corrupting
         //    state.
         let firstResult = try runner.run(["rebase", "-i", "--no-autostash", base], env: env)
-        combinedLog += format(result: firstResult, label: "rebase -i")
+        active.log += format(result: firstResult, label: "rebase -i")
 
-        // 5. Pause loop. git rebase exits with code 0 when it pauses on
-        //    an `edit` (or `break`) — we need to detect the pause via
-        //    the .git/rebase-merge directory rather than relying on
-        //    exit codes alone. For each pause:
-        //      • find the stopped commit
-        //      • if it's an edit row with an editPlan, run the split
-        //      • run `git rebase --continue`
-        //    Loop until rebase-merge is gone (success) or a continue
-        //    fails (treated as failure → caller rolls back).
+        return try driveLoop(plan: plan, active: active)
+    }
+
+    /// Resume after the user resolved conflicts and asked GitChop to
+    /// continue. Runs `git rebase --continue` and re-enters the pause
+    /// loop. Returns the new outcome (success / failed / conflicted again).
+    func continueAfterConflict(plan: [PlanItem], active: ActiveRebase) throws -> (RebaseOutcome, ActiveRebase?) {
+        let cont = try runner.run(["rebase", "--continue"], env: active.env)
+        active.log += format(result: cont, label: "rebase --continue")
+        return try driveLoop(plan: plan, active: active)
+    }
+
+    /// `git rebase --skip` — drop the conflicted commit and continue
+    /// with the rest of the plan.
+    func skipConflict(plan: [PlanItem], active: ActiveRebase) throws -> (RebaseOutcome, ActiveRebase?) {
+        let skip = try runner.run(["rebase", "--skip"], env: active.env)
+        active.log += format(result: skip, label: "rebase --skip")
+        return try driveLoop(plan: plan, active: active)
+    }
+
+    /// `git rebase --abort` + restore from backup. Always terminal —
+    /// cleans up temp files and returns a failed outcome.
+    func abortConflict(active: ActiveRebase) -> RebaseOutcome {
+        _ = try? runner.run(["rebase", "--abort"])
+        try? restore(from: active.backupRef)
+        active.log += "\nAborted by user.\n"
+        let log = active.log
+        let backup = active.backupRef
+        active.cleanup()
+        return RebaseOutcome(kind: .failed, log: log, backupRef: backup)
+    }
+
+    // MARK: - Driver
+
+    /// The pause loop. Called fresh from `apply` and re-entered from
+    /// continue/skip after the user resolves a conflict. Returns either
+    /// a terminal outcome (cleanup performed, second tuple element nil)
+    /// or `.conflicted(files)` (rebase still in flight, ActiveRebase
+    /// returned for the caller to drive).
+    private func driveLoop(plan: [PlanItem], active: ActiveRebase) throws -> (RebaseOutcome, ActiveRebase?) {
         var safetyCounter = 0
         while isRebaseInProgress() {
             safetyCounter += 1
             if safetyCounter > plan.count + 4 {
                 // Defensive: shouldn't ever loop more times than there
                 // are commits in the plan plus a small fudge factor.
-                combinedLog += "\n!! pause loop exceeded safety bound; aborting\n"
-                break
+                active.log += "\n!! pause loop exceeded safety bound; aborting\n"
+                _ = try? runner.run(["rebase", "--abort"])
+                let log = active.log
+                let backup = active.backupRef
+                active.cleanup()
+                return (RebaseOutcome(kind: .failed, log: log, backupRef: backup), nil)
+            }
+
+            // Conflict gate: if there are unmerged paths, hand control
+            // back to the user before attempting any continue. The
+            // rebase stays in-flight; the ActiveRebase carries the
+            // state needed to resume.
+            let conflicts = unmergedFiles()
+            if !conflicts.isEmpty {
+                return (RebaseOutcome(kind: .conflicted(files: conflicts), log: active.log, backupRef: active.backupRef), active)
             }
 
             let stoppedSha = readStoppedSha()
@@ -253,38 +350,55 @@ struct RebaseEngine {
                 if item.verb == .edit, let editPlan = item.editPlan, !editPlan.buckets.isEmpty {
                     do {
                         let splitLog = try runSplit(plan: editPlan, originalSubject: item.commit.subject)
-                        combinedLog += "\n── Splitting \(item.commit.shortHash) into \(editPlan.buckets.count) commits ──\n\(splitLog)"
+                        active.log += "\n── Splitting \(item.commit.shortHash) into \(editPlan.buckets.count) commits ──\n\(splitLog)"
                     } catch let e {
-                        combinedLog += "\n!! split failed for \(item.commit.shortHash): \(e.localizedDescription)\n"
-                        // Abort the rebase; caller will roll back via
-                        // the backup ref.
+                        active.log += "\n!! split failed for \(item.commit.shortHash): \(e.localizedDescription)\n"
                         _ = try? runner.run(["rebase", "--abort"])
-                        return RebaseOutcome(kind: .failed, log: combinedLog, backupRef: backupRef)
+                        let log = active.log
+                        let backup = active.backupRef
+                        active.cleanup()
+                        return (RebaseOutcome(kind: .failed, log: log, backupRef: backup), nil)
                     }
                 } else if item.verb == .edit {
-                    combinedLog += "\n── Pausing on edit \(item.commit.shortHash) (no split plan, continuing) ──\n"
+                    active.log += "\n── Pausing on edit \(item.commit.shortHash) (no split plan, continuing) ──\n"
                 }
             }
 
-            let cont = try runner.run(["rebase", "--continue"], env: env)
-            combinedLog += format(result: cont, label: "rebase --continue")
+            let cont = try runner.run(["rebase", "--continue"], env: active.env)
+            active.log += format(result: cont, label: "rebase --continue")
             if !cont.isSuccess {
-                // The continue failed (e.g. conflict, or our split left
-                // the index in a bad state). Don't abort here — caller
-                // will detect the in-progress rebase via final-state
-                // check below and abort + roll back.
+                // Continue failed. If unmerged files appeared, surface
+                // as conflict; otherwise treat as terminal failure.
+                let conflictsAfter = unmergedFiles()
+                if !conflictsAfter.isEmpty {
+                    return (RebaseOutcome(kind: .conflicted(files: conflictsAfter), log: active.log, backupRef: active.backupRef), active)
+                }
                 break
             }
         }
 
-        // 6. Final state. Success requires both: starting result
-        //    produced no fatal error AND we're no longer mid-rebase.
+        // Terminal: rebase-merge is gone (success) or break-out from a
+        // failed continue with no conflict (treated as failure).
         let success = !isRebaseInProgress()
-        return RebaseOutcome(
-            kind: success ? .success : .failed,
-            log: combinedLog,
-            backupRef: backupRef
+        let log = active.log
+        let backup = active.backupRef
+        active.cleanup()
+        return (
+            RebaseOutcome(kind: success ? .success : .failed, log: log, backupRef: backup),
+            nil
         )
+    }
+
+    /// Files git considers unmerged in the working tree right now.
+    /// Empty when there are no conflicts. Exposed `internal` so the
+    /// conflict sheet can refresh state without re-entering the loop.
+    func unmergedFiles() -> [String] {
+        guard let result = try? runner.run(["diff", "--name-only", "--diff-filter=U"]),
+              result.isSuccess else { return [] }
+        return result.stdout
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
     }
 
     // MARK: - Pause detection / split execution

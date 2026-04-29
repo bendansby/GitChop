@@ -132,7 +132,10 @@ fi
 AUTH="$FTP_USER:$FTP_PASS"
 upload() {
     local src="$1" dst="$2"
-    /usr/bin/curl -sS --fail --user "$AUTH" --upload-file "$src" \
+    # --ftp-create-dirs makes any missing remote directories on first
+    # upload to a new app subpath. Without it curl errors with
+    # "Server denied you to change to the given directory".
+    /usr/bin/curl -sS --fail --ftp-create-dirs --user "$AUTH" --upload-file "$src" \
         "ftp://$FTP_HOST$FTP_REMOTE_BASE/$dst"
     echo "  ✓ $dst"
 }

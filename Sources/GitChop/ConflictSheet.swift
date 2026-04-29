@@ -16,14 +16,19 @@ struct ConflictSheet: View {
         VStack(alignment: .leading, spacing: 14) {
             header
             Divider()
-            fileList
-                .frame(maxHeight: .infinity)
+            HStack(alignment: .top, spacing: 14) {
+                fileList
+                    .frame(maxWidth: .infinity)
+                remainingTodoList
+                    .frame(maxWidth: .infinity)
+            }
+            .frame(maxHeight: .infinity)
             Divider()
             footer
         }
         .padding(20)
-        .frame(width: 580)
-        .frame(minHeight: 360, idealHeight: 440, maxHeight: 640)
+        .frame(width: 720)
+        .frame(minHeight: 420, idealHeight: 520, maxHeight: 720)
     }
 
     // MARK: - Sections
@@ -157,6 +162,89 @@ struct ConflictSheet: View {
             .font(.callout.weight(.medium))
             .foregroundStyle(Color(red: 0.78, green: 0.42, blue: 0.05))
         }
+    }
+
+    // MARK: - Remaining-todo (mid-rebase reorder)
+
+    /// Drag-reorderable list of commits git hasn't processed yet.
+    /// Edits stay in memory until Continue / Skip flushes them to the
+    /// rebase TODO file. Empty list (e.g. the conflicting commit was
+    /// the last one) collapses to a friendly note.
+    private var remainingTodoList: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Remaining commits (\(session.remainingTodo.count))")
+                .font(.caption).textCase(.uppercase).tracking(0.4)
+                .foregroundStyle(.secondary)
+            if session.remainingTodo.isEmpty {
+                emptyTodoNote
+            } else {
+                List {
+                    ForEach(session.remainingTodo) { item in
+                        todoRow(item)
+                    }
+                    .onMove { offsets, destination in
+                        session.moveRemainingTodo(from: offsets, to: destination)
+                    }
+                }
+                .listStyle(.inset)
+                .alternatingRowBackgrounds(.disabled)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .strokeBorder(Color.secondary.opacity(0.18), lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            }
+        }
+    }
+
+    private var emptyTodoNote: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Nothing left to apply")
+                .font(.callout.weight(.medium))
+                .foregroundStyle(.secondary)
+            Text("Resolving this commit will finish the rebase.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(Color(.textBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .strokeBorder(Color.secondary.opacity(0.18), lineWidth: 1)
+        )
+    }
+
+    private func todoRow(_ item: PlanItem) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "line.3.horizontal")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .frame(width: 12)
+            HStack(spacing: 4) {
+                Text(item.verb.glyph)
+                    .font(.system(.caption, design: .monospaced).bold())
+                Text(item.verb.rawValue)
+                    .font(.system(.caption, design: .monospaced))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .background(item.verb.color)
+            .clipShape(Capsule())
+            Text(item.commit.shortHash)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .frame(width: 56, alignment: .leading)
+            Text(item.commit.subject)
+                .font(.callout)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 1)
     }
 
     // MARK: - File actions

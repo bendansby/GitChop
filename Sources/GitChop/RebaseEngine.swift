@@ -62,8 +62,10 @@ struct RebaseEngine {
         // the load.
         //
         // %x09 = TAB. Split on TAB so subjects with spaces stay intact.
-        // Format: full-sha \t short-sha \t author \t date \t subject
-        let format = "%H%x09%h%x09%an%x09%ad%x09%s"
+        // Format: full-sha \t short-sha \t author \t date \t unix-ts \t subject
+        // %ct (committer date, unix epoch) gives us a stable timestamp
+        // for the relative-age column without a second log invocation.
+        let format = "%H%x09%h%x09%an%x09%ad%x09%ct%x09%s"
         let logResult = try runner.run([
             "log", "-\(n + 1)", "--no-merges",
             "--date=format:%b %-d, %Y",
@@ -79,14 +81,15 @@ struct RebaseEngine {
             .split(separator: "\n", omittingEmptySubsequences: true)
             .reversed()
             .compactMap { line in
-                let parts = line.split(separator: "\t", maxSplits: 4, omittingEmptySubsequences: false)
-                guard parts.count == 5 else { return nil }
+                let parts = line.split(separator: "\t", maxSplits: 5, omittingEmptySubsequences: false)
+                guard parts.count == 6 else { return nil }
                 return Commit(
                     fullHash: String(parts[0]),
                     shortHash: String(parts[1]),
-                    subject: String(parts[4]),
+                    subject: String(parts[5]),
                     author: String(parts[2]),
-                    date: String(parts[3])
+                    date: String(parts[3]),
+                    timestamp: TimeInterval(String(parts[4])) ?? 0
                 )
             }
 
@@ -389,6 +392,53 @@ struct RebaseEngine {
         )
     }
 
+    // MARK: - Remaining-todo I/O (mid-rebase reorder)
+
+    /// Read `.git/rebase-merge/git-rebase-todo` — the list of commits
+    /// git hasn't processed yet — into editable PlanItems. Comments
+    /// and blank lines are skipped. Returns nil if there's no rebase
+    /// in flight or the file is missing.
+    ///
+    /// Subjects come straight from the TODO line (which we wrote when
+    /// starting the rebase). Author/date aren't in the TODO so we leave
+    /// them blank — the conflict sheet's reorder list doesn't need them.
+    func readRemainingTodo() -> [PlanItem]? {
+        let path = runner.cwd.appendingPathComponent(".git/rebase-merge/git-rebase-todo")
+        guard let raw = try? String(contentsOf: path, encoding: .utf8) else { return nil }
+        var items: [PlanItem] = []
+        for line in raw.split(separator: "\n", omittingEmptySubsequences: false) {
+            let trimmed = String(line).trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+            // Format: "<verb> <full-sha> <subject…>"
+            let parts = trimmed.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true).map(String.init)
+            guard parts.count >= 2, let verb = Verb(rawValue: parts[0]) else { continue }
+            let sha = parts[1]
+            let subject = parts.count > 2 ? parts[2] : ""
+            let commit = Commit(
+                fullHash: sha,
+                shortHash: String(sha.prefix(7)),
+                subject: subject,
+                author: "",
+                date: "",
+                timestamp: 0
+            )
+            items.append(PlanItem(commit: commit, verb: verb))
+        }
+        return items
+    }
+
+    /// Overwrite `.git/rebase-merge/git-rebase-todo` with the user's
+    /// reordered list. Called just before `git rebase --continue` so
+    /// git picks up the new ordering for the remaining work.
+    func writeRemainingTodo(_ items: [PlanItem]) throws {
+        let path = runner.cwd.appendingPathComponent(".git/rebase-merge/git-rebase-todo")
+        let lines = items.map { item in
+            "\(item.verb.rawValue) \(item.commit.fullHash) \(item.commit.subject)"
+        }
+        let payload = lines.joined(separator: "\n") + "\n"
+        try payload.write(to: path, atomically: true, encoding: .utf8)
+    }
+
     /// Files git considers unmerged in the working tree right now.
     /// Empty when there are no conflicts. Exposed `internal` so the
     /// conflict sheet can refresh state without re-entering the loop.
@@ -428,15 +478,23 @@ struct RebaseEngine {
     /// currently paused on an edit, with the edit's commit already
     /// applied (HEAD == that commit). Steps:
     ///   1. `git reset HEAD^` — uncommit, keep working tree changes
-    ///   2. `git diff` against HEAD to capture the original commit's
-    ///      changes
-    ///   3. Re-parse hunks, match against the EditPlan's buckets
-    ///   4. For each bucket: reassemble its hunks, `git apply --cached`,
-    ///      then commit with the bucket's subject
-    ///   5. If anything's left unstaged, commit it as a final
-    ///      "leftover" commit using the original subject — defends
-    ///      against a stale plan whose hunk IDs no longer cover the
-    ///      whole diff
+    ///   2. For each bucket, in order:
+    ///        • re-`git diff HEAD` and re-parse — context lines may
+    ///          have shifted relative to sheet-time (upstream rebase
+    ///          steps modified the same file) and earlier buckets in
+    ///          this loop have already moved hunks into commits, so
+    ///          the live diff is what `git apply` will be matching
+    ///          against
+    ///        • match the bucket's saved hunkIDs against the live parse
+    ///        • reassemble using LIVE hunks (current line numbers)
+    ///        • `git apply --cached --recount`, then commit
+    ///   3. If anything's left unstaged after all buckets, commit as a
+    ///      "leftover" guard against a stale plan whose hunk IDs no
+    ///      longer cover the whole diff.
+    ///
+    /// Hunk IDs are content-stable (file + the +/- body lines, no line
+    /// numbers and no context), so they survive the upstream-context
+    /// drift that broke the previous "parse once" approach.
     private func runSplit(plan: EditPlan, originalSubject: String) throws -> String {
         var log = ""
 
@@ -447,21 +505,19 @@ struct RebaseEngine {
             throw EngineError.gitFailed("git reset HEAD^: \(reset.stderr.trimmingCharacters(in: .whitespacesAndNewlines))")
         }
 
-        // 2. Capture the diff once so all bucket-applies see the same
-        //    parsed hunks (the order matters less than consistency).
-        let diff = try runner.run(["diff", "--no-color", "HEAD"])
-        guard diff.isSuccess else {
-            throw EngineError.gitFailed("git diff HEAD: \(diff.stderr.trimmingCharacters(in: .whitespacesAndNewlines))")
-        }
-        let parsed = HunkParser.parse(diff.stdout)
-        let allHunkIDs = Set(parsed.allHunks.map(\.id))
-
-        // 3. Apply each bucket in order.
+        // 2. Apply each bucket in order, re-parsing the live diff
+        //    before each one so we always reassemble against the
+        //    current state of the working tree.
         for (idx, bucket) in plan.buckets.enumerated() {
             let bucketLabel = "Bucket \(idx + 1) (\(bucket.subject))"
-            // Restrict to hunk IDs that actually parsed out of the
-            // current diff — protects against stale plans.
-            let validIDs = bucket.hunkIDs.intersection(allHunkIDs)
+
+            let diff = try runner.run(["diff", "--no-color", "HEAD"])
+            guard diff.isSuccess else {
+                throw EngineError.gitFailed("git diff HEAD: \(diff.stderr.trimmingCharacters(in: .whitespacesAndNewlines))")
+            }
+            let parsed = HunkParser.parse(diff.stdout)
+            let liveHunkIDs = Set(parsed.allHunks.map(\.id))
+            let validIDs = bucket.hunkIDs.intersection(liveHunkIDs)
             if validIDs.isEmpty {
                 log += "  \(bucketLabel): no live hunks, skipping\n"
                 continue

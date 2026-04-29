@@ -101,21 +101,26 @@ struct RewordSheet: View {
 
     @ViewBuilder
     private var statusLine: some View {
+        // Same palette as the split sheet's status line so the two
+        // modal footers feel like a set: green = "ready to save",
+        // muted = "nothing to save". Higher-contrast greens than
+        // system .green, which washes out on white backgrounds.
+        let okColor = Color(red: 0.13, green: 0.55, blue: 0.20)
         let trimmedNew = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedOrig = originalMessage.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmedNew.isEmpty {
-            Label("Empty — saving will leave the original intact", systemImage: "circle")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        } else if trimmedNew == trimmedOrig {
-            Label("Unchanged — saving will leave it as-is", systemImage: "circle")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        } else {
-            Label("Will rewrite this commit's message", systemImage: "arrow.right.circle.fill")
-                .font(.caption.weight(.medium))
-                .foregroundStyle(Verb.reword.color)
+        Group {
+            if trimmedNew.isEmpty {
+                Label("Empty — saving will leave the original intact", systemImage: "circle")
+                    .foregroundStyle(.secondary)
+            } else if trimmedNew == trimmedOrig {
+                Label("Unchanged — saving will leave it as-is", systemImage: "circle")
+                    .foregroundStyle(.secondary)
+            } else {
+                Label("Will rewrite this commit's message", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(okColor)
+            }
         }
+        .font(.callout.weight(.medium))
     }
 
     // MARK: - Load + identity

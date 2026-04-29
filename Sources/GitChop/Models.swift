@@ -95,15 +95,43 @@ struct EditPlan: Hashable, Codable {
     }
 }
 
-/// One commit loaded from `git log`. Hash is short, `fullHash` is the SHA-1.
+/// One commit loaded from `git log`. Hash is short, `fullHash` is the
+/// SHA-1. `date` is the absolute display string ("Apr 22, 2026");
+/// `timestamp` is the committer date as a unix epoch so we can format
+/// relative times ("3d") in the chronology column without re-parsing.
 struct Commit: Identifiable, Hashable {
     let fullHash: String
     let shortHash: String
     let subject: String
     let author: String
     let date: String
+    let timestamp: TimeInterval
 
     var id: String { fullHash }
+
+    /// Compact relative-age token for the commit list's chronology
+    /// column: "now" / "Xm" / "Xh" / "Xd" / "Xw" / "Xmo" / "Xy".
+    /// Hand-rolled so we get short tokens — RelativeDateTimeFormatter's
+    /// "2 weeks ago" doesn't fit the row.
+    var relativeAge: String {
+        let now = Date().timeIntervalSince1970
+        let delta = max(0, now - timestamp)
+        let minute: TimeInterval = 60
+        let hour = 60 * minute
+        let day = 24 * hour
+        let week = 7 * day
+        let month = 30 * day
+        let year = 365 * day
+        switch delta {
+        case ..<minute:    return "now"
+        case ..<hour:      return "\(Int(delta / minute))m"
+        case ..<day:       return "\(Int(delta / hour))h"
+        case ..<week:      return "\(Int(delta / day))d"
+        case ..<month:     return "\(Int(delta / week))w"
+        case ..<year:      return "\(Int(delta / month))mo"
+        default:           return "\(Int(delta / year))y"
+        }
+    }
 }
 
 /// One row in the rebase plan: a commit + the verb the user wants applied.

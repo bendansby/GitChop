@@ -168,14 +168,29 @@ struct ParsedDiff {
         let header: String      // "@@ -X,Y +A,B @@ optional context"
         let body: String        // " context", "-removed", "+added" lines, joined with \n
 
-        /// Stable content-derived ID. Uses file + header + first body
-        /// line, which is unique-enough across re-parses while not
-        /// requiring a real hash. Survives close-and-reopen of the
-        /// split sheet.
+        /// Stable content-derived ID. Uses file + the body's +/- lines
+        /// (the actual changes, dropping context). Stable across:
+        ///   • close-and-reopen of the split sheet
+        ///   • sheet-time vs apply-time re-parse, even when upstream
+        ///     rebase steps shifted the hunk's line numbers (the old
+        ///     ID format included `header` which embeds line numbers,
+        ///     so it broke as soon as anything else in the rebase
+        ///     edited the same file before this commit).
+        ///
+        /// Context lines are excluded because they're the part most
+        /// likely to drift between sheet-time and apply-time. The +/-
+        /// lines are what the user actually changed, and ID-ing on
+        /// those keeps bucket assignments tied to the user's intent.
         var id: String {
-            let firstBodyLine = body.split(separator: "\n", omittingEmptySubsequences: false)
-                .first.map(String.init) ?? ""
-            return "\(file)::\(header)::\(firstBodyLine)"
+            let changes = body
+                .split(separator: "\n", omittingEmptySubsequences: false)
+                .filter {
+                    let s = String($0)
+                    if s.hasPrefix("+++") || s.hasPrefix("---") { return false }
+                    return s.hasPrefix("+") || s.hasPrefix("-")
+                }
+                .joined(separator: "\n")
+            return "\(file)::\(changes)"
         }
 
         /// Counts of +added and -removed lines, used by the sheet's

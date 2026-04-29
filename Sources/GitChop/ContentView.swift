@@ -315,6 +315,20 @@ struct ContentView: View {
     }
 
     private func statusBar(session: RebaseSession) -> some View {
+        StatusBar(session: session)
+    }
+}
+
+/// Bottom-of-window status text. Lives in its own subview so it can
+/// `@ObservedObject` the active session — ContentView only observes
+/// `Workspace`, which doesn't republish when a session's `@Published`
+/// fields change. Without this dedicated observer the status text
+/// would lag behind plan / count changes (e.g. depth menu, post-Apply
+/// reload), even though the computed `status` property reads live state.
+private struct StatusBar: View {
+    @ObservedObject var session: RebaseSession
+
+    var body: some View {
         HStack {
             if session.isApplying {
                 ProgressView().controlSize(.small)

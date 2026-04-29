@@ -57,21 +57,26 @@ The hard part is the polling story — we don't want to busy-loop.
 A `DispatchSourceFileSystemObject` watching `.git/rebase-merge/`
 would let us react to git state changes without timers.
 
-### Edge cases in hunk overlap   ·   value: medium   ·   cost: 1 day
+### Edge cases in hunk overlap   ·   value: medium   ·   cost: ~~1 day~~ DONE
 
-When two buckets contain hunks that touch the same lines (e.g.
-bucket 1 modifies lines 10–15, bucket 2 modifies lines 13–20),
-applying bucket 1 changes the line numbers; bucket 2's stored
-hunk header (`@@ -13,8 +20,15 @@`) no longer matches. `--recount`
-mitigates this for most cases but not all.
+Was: parse-once-at-apply-time meant upstream rebase steps that shifted
+context lines (or earlier buckets in the loop modifying the same file)
+broke later bucket applies. Hunk IDs included the `@@` header so any
+line-number shift turned bucket assignments into ID misses.
 
-Fix: at apply time, after each bucket's commit, re-`git diff HEAD`
-and re-parse hunks for the next bucket against the NEW state.
-Match by content, not by stored line numbers — find each remaining
-hunk's added/removed lines in the live diff and apply that.
+Fixed in v0.3:
+- `Hunk.id` is now `file::<+/- body lines>` (no header, no context).
+  Stable across re-parses regardless of upstream line-number drift.
+- `runSplit` re-parses `git diff HEAD` before each bucket and
+  reassembles using live hunks, so apply always sees current line
+  numbers. Bucket 2's hunks are matched against the post-bucket-1
+  state, etc.
 
-This is "split-commit but actually robust." Ship-blocker only if
-it's hit often in practice; ship as fast-follow otherwise.
+Remaining failure mode: when an upstream rebase step actually
+*changed* a context line's content (not just shifted its position),
+the hunk's removal lines won't match the live file and the apply
+fails. That's a true 3-way-merge problem; today we still roll back
+on it. Future work: surface as a conflict and let the user resolve.
 
 ### Plan pre-validation   ·   value: medium   ·   cost: 2h
 

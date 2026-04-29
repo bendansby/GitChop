@@ -178,11 +178,16 @@ parsing (which happens against `git diff HEAD` after the reset).
   below an edit row chains into the result of the split (last bucket).
   An edit row absorbs squash/fixups below it — they fold into the
   last split commit at apply time.
-- **The toolbar Apply button needs its own observer.** ContentView
-  observes Workspace; Workspace doesn't republish when a session's
-  @Published properties change. So `ApplyButton` is its own
-  `@ObservedObject`-bound subview. Without that the button's state
-  (hasChanges, isApplying) lags behind the user's edits.
+- **Anything in ContentView that reads session state needs its own
+  observer subview.** ContentView observes `Workspace`; Workspace
+  doesn't republish when a session's @Published properties change.
+  So `ApplyButton`, `ResetButton`, `StatusBar`, `SplitSheetHost`,
+  `RewordSheetHost`, and `ConflictSheetHost` are all their own
+  `@ObservedObject`-bound subviews / view modifiers. Anything new
+  in ContentView that wants to read `session.something` will lag
+  behind the user's edits unless it follows this pattern. Inner
+  views like `CommitListView` are fine because they pick the
+  session up via `@EnvironmentObject` (re-injected by `tabContent`).
 - **Two sheets in sequence need a delay.** When the confirm sheet's
   Apply runs, we dismiss it, sleep 250 ms, then run the rebase and
   pop the result sheet. Without the sleep the dismiss/present

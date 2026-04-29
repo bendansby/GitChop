@@ -15,8 +15,27 @@ final class RebaseSession: ObservableObject, Identifiable {
     @Published var baseHash: String = ""
     @Published var selectedID: String?
     @Published var diffText: String = ""
-    @Published var status: String = "Open a git repo to begin."
     @Published var isApplying = false
+
+    /// One-off message override — set by actions that want to surface a
+    /// transient notice ("Rebase applied", error text). Nil falls back
+    /// to a live "Loaded N of M on branch" derived from current state,
+    /// so the count never goes stale relative to plan/totalNonMergeCount.
+    @Published var actionMessage: String? = nil
+
+    /// Status-bar text. Computed so it always reflects current
+    /// plan.count + totalNonMergeCount; previously a stored string
+    /// that drifted when callers changed plan size without also
+    /// re-setting status.
+    var status: String {
+        if let msg = actionMessage, !msg.isEmpty { return msg }
+        if branch.isEmpty && plan.isEmpty { return "Open a git repo to begin." }
+        if plan.isEmpty { return "No commits loaded on \(branch)." }
+        let suffix = plan.count < totalNonMergeCount
+            ? " of \(totalNonMergeCount) on \(branch)."
+            : " (all) on \(branch)."
+        return "Loaded \(plan.count) commit\(plan.count == 1 ? "" : "s")\(suffix)"
+    }
     @Published var lastOutcome: RebaseOutcome?
 
     /// How many commits the user asked us to load. Distinct from
@@ -97,15 +116,14 @@ final class RebaseSession: ObservableObject, Identifiable {
             requestedDepth = plan.count
             originalOrder = plan.map(\.id)
             selectedID = plan.last?.id    // most-recent commit selected by default
-            let suffix = plan.count < totalNonMergeCount
-                ? " of \(totalNonMergeCount) on \(branch)."
-                : " (all) on \(branch)."
-            status = "Loaded \(plan.count) commit\(plan.count == 1 ? "" : "s")\(suffix)"
+            // Clear any one-off override; computed `status` will derive
+            // the live "Loaded N of M" text from the freshly-set state.
+            actionMessage = nil
             recomputeChangedFlag()
             loadDiffForSelection()
             loadHunkCountsInBackground()
         } catch {
-            status = error.localizedDescription
+            actionMessage = error.localizedDescription
             plan = []
             baseHash = ""
             totalNonMergeCount = 0
@@ -318,6 +336,13 @@ final class RebaseSession: ObservableObject, Identifiable {
     /// always live.
     @Published var conflictedFiles: [String] = []
 
+    /// Editable view of the rebase TODO file's remaining commits while
+    /// paused on a conflict. The conflict sheet renders these as a
+    /// drag-reorderable list; on Continue we write them back to
+    /// `.git/rebase-merge/git-rebase-todo` so git picks up the new
+    /// ordering for the rest of the rebase.
+    @Published var remainingTodo: [PlanItem] = []
+
     /// Cached hunk counts keyed by full SHA. Populated lazily after
     /// each plan load via a background task running one `git diff-tree`
     /// per commit. Used by the verb chip menu to disable the `edit`
@@ -335,7 +360,7 @@ final class RebaseSession: ObservableObject, Identifiable {
             let (outcome, active) = try engine.apply(plan: plan, base: baseHash)
             handleOutcome(outcome, active: active, repo: repo, engine: engine)
         } catch {
-            status = "Apply failed: \(error.localizedDescription)"
+            actionMessage = "Apply failed: \(error.localizedDescription)"
             lastOutcome = RebaseOutcome(kind: .failed, log: error.localizedDescription, backupRef: "")
         }
     }
@@ -350,10 +375,13 @@ final class RebaseSession: ObservableObject, Identifiable {
         defer { isApplying = false }
         let engine = RebaseEngine(runner: GitRunner(cwd: repo))
         do {
+            // Flush any reorder the user made in the conflict sheet so
+            // git uses the new ordering for the rest of the rebase.
+            try engine.writeRemainingTodo(remainingTodo)
             let (outcome, next) = try engine.continueAfterConflict(plan: plan, active: active)
             handleOutcome(outcome, active: next, repo: repo, engine: engine)
         } catch {
-            status = "Continue failed: \(error.localizedDescription)"
+            actionMessage = "Continue failed: \(error.localizedDescription)"
             lastOutcome = RebaseOutcome(kind: .failed, log: error.localizedDescription, backupRef: active.backupRef)
         }
     }
@@ -366,10 +394,13 @@ final class RebaseSession: ObservableObject, Identifiable {
         defer { isApplying = false }
         let engine = RebaseEngine(runner: GitRunner(cwd: repo))
         do {
+            // Same flush as Continue: --skip drops the failing commit
+            // but proceeds with whatever's in the todo file.
+            try engine.writeRemainingTodo(remainingTodo)
             let (outcome, next) = try engine.skipConflict(plan: plan, active: active)
             handleOutcome(outcome, active: next, repo: repo, engine: engine)
         } catch {
-            status = "Skip failed: \(error.localizedDescription)"
+            actionMessage = "Skip failed: \(error.localizedDescription)"
             lastOutcome = RebaseOutcome(kind: .failed, log: error.localizedDescription, backupRef: active.backupRef)
         }
     }
@@ -404,21 +435,43 @@ final class RebaseSession: ObservableObject, Identifiable {
         case .success:
             activeRebase = nil
             conflictedFiles = []
-            status = "Rebase applied. Backup: \(outcome.backupRef)"
+            // load() clears actionMessage so the live "Loaded N..." text
+            // shows. The result sheet already surfaces success + backup
+            // ref; pinning a transient status here would just go stale
+            // on the next plan change.
             load(repo: repo)
         case .failed:
             activeRebase = nil
             conflictedFiles = []
-            status = "Rebase failed. Aborting and restoring from backup."
             // Belt-and-suspenders: if the engine left a rebase in flight
             // on a non-conflict failure, abort + restore here.
             try? engine.abort()
             try? engine.restore(from: outcome.backupRef)
+            actionMessage = "Rebase failed. Restored from backup."
             load(repo: repo)
         case .conflicted(let files):
             activeRebase = active
             conflictedFiles = files
-            status = "Conflict in \(files.count) file\(files.count == 1 ? "" : "s") — resolve and continue."
+            actionMessage = "Conflict in \(files.count) file\(files.count == 1 ? "" : "s") — resolve and continue."
+            // Snapshot the remaining-todo so the sheet can offer
+            // reorder. Reads from `.git/rebase-merge/git-rebase-todo`,
+            // which contains the lines git hasn't processed yet.
+            remainingTodo = engine.readRemainingTodo() ?? []
         }
+    }
+
+    /// Drag-reorder support for `remainingTodo`. The conflict sheet
+    /// binds onMove to this; the change is in-memory until Continue
+    /// flushes it to disk.
+    func moveRemainingTodo(from offsets: IndexSet, to destination: Int) {
+        remainingTodo.move(fromOffsets: offsets, toOffset: destination)
+    }
+
+    /// Re-read the remaining-todo from disk. Useful if something else
+    /// touched the file (unlikely outside test scenarios).
+    func refreshRemainingTodo() {
+        guard let repo = repoURL, activeRebase != nil else { return }
+        let engine = RebaseEngine(runner: GitRunner(cwd: repo))
+        remainingTodo = engine.readRemainingTodo() ?? []
     }
 }

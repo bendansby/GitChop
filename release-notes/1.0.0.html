@@ -1,0 +1,22 @@
+<h2>1.0</h2>
+<p>GitChop is now open source under the MIT license. Source at <a href="https://github.com/bendansby/GitChop">github.com/bendansby/GitChop</a>.</p>
+
+<h2>What's in 1.0</h2>
+<ul>
+  <li><strong>Drag-reorder commits</strong> with verb chips on every row — <code>pick</code>, <code>reword</code>, <code>edit</code>, <code>squash</code>, <code>fixup</code>, <code>drop</code>. Squash and fixup show absorb badges so chains are visible at a glance.</li>
+  <li><strong>Split a commit</strong> by marking it <code>edit</code>: a sheet lists every hunk, you assign each to a named bucket, and each bucket becomes its own commit at apply time. The terminal-only <code>edit → --continue</code> dance, done as a UI.</li>
+  <li><strong>Reword in place</strong> via a focused modal preloaded with the commit's full message. Applied during the rebase via a tiny <code>$GIT_EDITOR</code> helper — no editor pop-ups.</li>
+  <li><strong>Conflict pause sheet</strong> when git stops on conflicts. Open conflicted files in your editor, click Continue. Or Skip the commit, or Abort. Mid-rebase reorder of the still-pending commits is supported from the same sheet.</li>
+  <li><strong>Custom rebase base.</strong> Right-click any commit → <em>Use as base</em>. Equivalent to <code>git rebase -i &lt;sha&gt;</code> from the terminal.</li>
+  <li><strong>Backup ref every Apply.</strong> Pre-rebase HEAD is saved to <code>refs/gitchop-backup/&lt;timestamp&gt;</code>. Failed rebases auto-rollback; manual recovery is one <code>git update-ref</code> away.</li>
+  <li><strong>Multi-repo tabs</strong>, persistent across launches. Tab strip auto-hides when only one repo is open.</li>
+  <li><strong>Preferences</strong> (⌘,) for default load depth, custom <code>git</code> path, and editor selection (system default, a specific .app, or a shell command like <code>code --wait $FILE</code>).</li>
+  <li><strong>Auto-update</strong> via Sparkle.</li>
+</ul>
+
+<h2>Built for macOS</h2>
+<ul>
+  <li>Pure SwiftUI. macOS 14 Sonoma or later, Apple Silicon.</li>
+  <li>Notarized, signed, gatekeeper-friendly.</li>
+  <li>No analytics, no account, no servers. The only network call is the daily Sparkle update check.</li>
+</ul>

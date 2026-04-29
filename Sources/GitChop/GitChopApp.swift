@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import Sparkle
 
 @main
@@ -21,16 +22,39 @@ struct GitChopApp: App {
             ContentView()
                 .environmentObject(workspace)
                 .frame(minWidth: 900, minHeight: 600)
+                .background(MainWindowAccessor())
         }
         .windowResizability(.contentMinSize)
+
+        // Settings scene gets the standard ⌘, shortcut and "GitChop ›
+        // Settings…" menu placement automatically.
+        Settings {
+            PreferencesView()
+        }
         .commands {
             CommandGroup(replacing: .newItem) { }
             CommandGroup(after: .newItem) {
                 Button("Open Repo…") { workspace.openPicker() }
                     .keyboardShortcut("o", modifiers: .command)
-                Button("Close Tab") { workspace.closeActive() }
-                    .keyboardShortcut("w", modifiers: .command)
-                    .disabled(workspace.activeSessionID == nil)
+                Button("Close Tab") {
+                    // ⌘W is bound globally for this command, so it
+                    // fires regardless of which window has focus.
+                    // When a secondary window (Preferences, etc.) is
+                    // focused, route the close to it ourselves and
+                    // bail; otherwise close the active tab. We compare
+                    // against `MainWindowReference.shared.window`
+                    // rather than `NSApp.mainWindow` because Settings
+                    // windows on macOS 14+ become both the key AND
+                    // main window when focused, defeating that check.
+                    if let key = NSApp.keyWindow,
+                       key !== MainWindowReference.shared.window {
+                        key.performClose(nil)
+                        return
+                    }
+                    workspace.requestCloseActive()
+                }
+                .keyboardShortcut("w", modifiers: .command)
+                .disabled(workspace.activeSessionID == nil)
             }
             // Add "Check for Updates…" under the GitChop app menu, just
             // above the standard Services / Hide / Quit cluster.

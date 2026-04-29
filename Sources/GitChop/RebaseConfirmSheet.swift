@@ -56,9 +56,6 @@ struct RebaseConfirmSheet: View {
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Image(systemName: "scissors")
-                .font(.system(size: 22, weight: .semibold))
-                .foregroundStyle(.tint)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Apply rebase to \(session.branch.isEmpty ? "(detached HEAD)" : session.branch)?")
                     .font(.title3.weight(.semibold))
@@ -67,6 +64,9 @@ struct RebaseConfirmSheet: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            Image(systemName: "scissors")
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(.tint)
         }
     }
 

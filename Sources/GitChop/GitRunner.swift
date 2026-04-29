@@ -33,7 +33,10 @@ struct GitRunner {
 
     private func runImpl(args: [String], env: [String: String], stdin: String?) throws -> Result {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        // Resolve git path each call so a Preferences change takes
+        // effect without restarting the app. Nonisolated read off
+        // UserDefaults — safe to call from background tasks.
+        process.executableURL = URL(fileURLWithPath: Preferences.resolvedGitPath())
         process.currentDirectoryURL = cwd
         process.arguments = args
 

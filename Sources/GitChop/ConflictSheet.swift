@@ -256,7 +256,7 @@ struct ConflictSheet: View {
 
     private func open(_ path: String) {
         guard let url = absoluteURL(for: path) else { return }
-        NSWorkspace.shared.open(url)
+        Preferences.shared.openFileForEditing(url)
     }
 
     private func reveal(_ path: String) {

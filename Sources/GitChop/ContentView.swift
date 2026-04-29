@@ -264,6 +264,28 @@ struct ContentView: View {
                 }
             }
         }
+        // Closing a tab that has unsaved plan edits goes through this
+        // dialog. Tab-strip X and ⌘W both route into
+        // `workspace.requestClose(...)`, which sets `pendingClose` if
+        // the session has changes.
+        .confirmationDialog(
+            "Close this repo?",
+            isPresented: Binding(
+                get: { workspace.pendingClose != nil },
+                set: { if !$0 { workspace.cancelPendingClose() } }
+            ),
+            titleVisibility: .visible,
+            presenting: workspace.pendingClose
+        ) { _ in
+            Button("Discard changes", role: .destructive) {
+                workspace.confirmPendingClose()
+            }
+            Button("Cancel", role: .cancel) {
+                workspace.cancelPendingClose()
+            }
+        } message: { session in
+            Text("\"\(session.repoName)\" has pending plan edits — verb changes, reordering, configured splits, or reword messages. Closing will discard them. The repo's history won't be touched.")
+        }
     }
 
     /// The main split + status bar, parameterized on the active session.

@@ -81,6 +81,18 @@ fi
 xattr -cr "$APP_DIR"
 
 echo "==> Signing (identity: $SIGN_IDENTITY)"
+# Hardened runtime + --timestamp are notarization requirements; both
+# cause friction (or outright loader failures) under ad-hoc local
+# signing. macOS rejects an ad-hoc + hardened-runtime + library-
+# validation combo when loading frameworks signed with a different
+# (or empty) team identifier. Only opt in for real Developer ID builds.
+HELPER_SIGN_FLAGS=(--force)
+APP_SIGN_FLAGS=(--force)
+if [[ "$SIGN_IDENTITY" != "-" ]]; then
+    HELPER_SIGN_FLAGS+=(--options runtime --timestamp)
+    APP_SIGN_FLAGS+=(--options runtime --timestamp)
+fi
+
 # Inside-out signing. Codesign requires nested bundles (XPC services,
 # Updater.app, Autoupdate) to be signed before the framework, and the
 # framework before the outer app. --preserve-metadata=entitlements
@@ -91,28 +103,27 @@ SPARKLE_FW="$CONTENTS/Frameworks/Sparkle.framework"
 if [[ -d "$SPARKLE_FW" ]]; then
     for xpc in "$SPARKLE_FW/Versions/B/XPCServices/"*.xpc; do
         [[ -d "$xpc" ]] || continue
-        codesign --force --options runtime --timestamp \
+        codesign "${HELPER_SIGN_FLAGS[@]}" \
             --preserve-metadata=entitlements \
             --sign "$SIGN_IDENTITY" "$xpc"
     done
     if [[ -e "$SPARKLE_FW/Versions/B/Autoupdate" ]]; then
-        codesign --force --options runtime --timestamp \
+        codesign "${HELPER_SIGN_FLAGS[@]}" \
             --sign "$SIGN_IDENTITY" "$SPARKLE_FW/Versions/B/Autoupdate"
     fi
     if [[ -d "$SPARKLE_FW/Versions/B/Updater.app" ]]; then
-        codesign --force --options runtime --timestamp \
+        codesign "${HELPER_SIGN_FLAGS[@]}" \
             --preserve-metadata=entitlements \
             --sign "$SIGN_IDENTITY" "$SPARKLE_FW/Versions/B/Updater.app"
     fi
-    codesign --force --options runtime --timestamp \
+    codesign "${HELPER_SIGN_FLAGS[@]}" \
         --sign "$SIGN_IDENTITY" "$SPARKLE_FW"
 fi
 
-SIGN_ARGS=(--force --options runtime --timestamp)
 if [[ -f GitChop.entitlements ]]; then
-    SIGN_ARGS+=(--entitlements GitChop.entitlements)
+    APP_SIGN_FLAGS+=(--entitlements GitChop.entitlements)
 fi
-codesign "${SIGN_ARGS[@]}" --sign "$SIGN_IDENTITY" "$APP_DIR"
+codesign "${APP_SIGN_FLAGS[@]}" --sign "$SIGN_IDENTITY" "$APP_DIR"
 
 echo "==> Verifying signature"
 codesign --verify --deep --strict --verbose=2 "$APP_DIR" || true

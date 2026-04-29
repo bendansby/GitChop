@@ -20,7 +20,17 @@ let package = Package(
             dependencies: [
                 .product(name: "Sparkle", package: "Sparkle"),
             ],
-            path: "Sources/GitChop"
+            path: "Sources/GitChop",
+            // Add the standard Mac-app rpath so dyld finds
+            // Sparkle.framework at Contents/Frameworks/Sparkle.framework.
+            // SwiftPM doesn't bake this in automatically the way Xcode
+            // does for "Embed & Sign" frameworks.
+            linkerSettings: [
+                .unsafeFlags([
+                    "-Xlinker", "-rpath",
+                    "-Xlinker", "@executable_path/../Frameworks",
+                ]),
+            ]
         ),
     ]
 )

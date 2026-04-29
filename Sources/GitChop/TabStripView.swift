@@ -89,7 +89,7 @@ private struct TabView: View {
         .overlay(alignment: .trailing) {
             if isActive || hovering {
                 Button {
-                    workspace.close(session.id)
+                    workspace.requestClose(session.id)
                 } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 9, weight: .bold))

@@ -80,6 +80,42 @@ final class Workspace: ObservableObject {
         close(id)
     }
 
+    // ── Pending-close confirmation ───────────────────────────────
+    /// When set, ContentView surfaces a confirmation dialog. The
+    /// session held here will be closed if the user confirms; cleared
+    /// either way. Lets the close path go through a single sheet
+    /// regardless of whether the close was triggered from the tab
+    /// strip's X or the ⌘W keyboard shortcut.
+    @Published var pendingClose: RebaseSession? = nil
+
+    /// Close the session by id, after confirming if it has pending
+    /// plan edits. No-op if the id doesn't match an open session.
+    func requestClose(_ id: UUID) {
+        guard let session = sessions.first(where: { $0.id == id }) else { return }
+        if session.hasChanges {
+            pendingClose = session
+        } else {
+            close(id)
+        }
+    }
+
+    /// Convenience for ⌘W and the menu item.
+    func requestCloseActive() {
+        guard let id = activeSessionID else { return }
+        requestClose(id)
+    }
+
+    /// Confirm-side of the pending-close dialog.
+    func confirmPendingClose() {
+        if let id = pendingClose?.id { close(id) }
+        pendingClose = nil
+    }
+
+    /// Cancel-side of the pending-close dialog.
+    func cancelPendingClose() {
+        pendingClose = nil
+    }
+
     /// Move a tab from one index to another. Used when we add
     /// drag-reorder later — wired up now so the persistence picks up
     /// the new order automatically.

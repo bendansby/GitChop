@@ -7,7 +7,14 @@
       "layers" : [
         {
           "image-name" : "ChatGPT Image Apr 28, 2026 at 07_50_24 PM 1 [Vectorized].svg",
-          "name" : "ChatGPT Image Apr 28, 2026 at 07_50_24 PM 1 [Vectorized]"
+          "name" : "ChatGPT Image Apr 28, 2026 at 07_50_24 PM 1 [Vectorized]",
+          "position" : {
+            "scale" : 0.89,
+            "translation-in-points" : [
+              0,
+              20
+            ]
+          }
         }
       ],
       "shadow" : {

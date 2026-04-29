@@ -41,7 +41,7 @@ final class RebaseSession: ObservableObject, Identifiable {
     /// How many commits the user asked us to load. Distinct from
     /// `plan.count` because the engine caps the request at the actual
     /// reachable depth (e.g. asking for 50 in a 24-commit repo loads 24).
-    @Published var requestedDepth: Int = 12
+    @Published var requestedDepth: Int = Preferences.shared.defaultDepth
 
     /// When set, the plan is loaded from `<customBase>..HEAD` and the
     /// depth menu's count knobs don't apply. Set by "Use as base" on a

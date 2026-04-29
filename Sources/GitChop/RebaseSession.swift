@@ -160,6 +160,20 @@ final class RebaseSession: ObservableObject, Identifiable {
         load(repo: repo, depth: depth)
     }
 
+    /// Discard all pending plan edits — verbs revert to .pick, the
+    /// original order is restored, edit plans and reword messages are
+    /// dropped. Implemented as a fresh `load` since load already
+    /// rebuilds plan + originalOrder + change flag from scratch. No
+    /// git side effects; the working tree and HEAD are untouched.
+    func resetPlan() {
+        guard let repo = repoURL else { return }
+        // Close any open per-row sheets so they don't reference rows
+        // whose state is about to change.
+        splitSheetCommitID = nil
+        rewordSheetCommitID = nil
+        load(repo: repo)
+    }
+
     /// Extend the loaded view by N commits (default `loadMoreIncrement`).
     /// Caps at `totalNonMergeCount` so we never request more than exists.
     func loadMore(by additional: Int = RebaseSession.loadMoreIncrement) {

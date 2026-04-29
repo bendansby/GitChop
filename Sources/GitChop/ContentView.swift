@@ -98,6 +98,49 @@ private struct SplitSheetHost: ViewModifier {
     }
 }
 
+/// "Reset plan" toolbar button. Discards in-flight plan edits (verbs,
+/// reorder, configured splits, reword messages) without touching git.
+/// Disabled when there's nothing to reset or while a rebase is being
+/// applied. Confirmation prompt before discarding so the user can't
+/// vaporize 20 minutes of careful chip-flipping with one click.
+private struct ResetButton: View {
+    @ObservedObject var session: RebaseSession
+    @State private var showConfirm = false
+
+    init(session: RebaseSession?) {
+        self.session = session ?? RebaseSession()
+        self.hasActiveSession = session != nil
+    }
+
+    private let hasActiveSession: Bool
+
+    var body: some View {
+        let canReset = hasActiveSession && session.hasChanges && !session.isApplying
+        Button {
+            guard canReset else { return }
+            showConfirm = true
+        } label: {
+            Label("Reset", systemImage: "arrow.uturn.backward")
+        }
+        .disabled(!canReset)
+        .help(canReset
+              ? "Discard pending plan edits"
+              : (hasActiveSession ? "Nothing to reset" : "Open a repo first"))
+        .confirmationDialog(
+            "Discard plan edits?",
+            isPresented: $showConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Discard", role: .destructive) {
+                session.resetPlan()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Verb changes, reordering, configured splits, and reword messages will all be cleared. The repo's history won't be touched.")
+        }
+    }
+}
+
 /// Hosts the conflict-resolution sheet. Driven by the session's
 /// `activeRebase` — when that's non-nil, a rebase is paused on
 /// conflicts and the sheet stays up across continue/skip cycles
@@ -175,6 +218,9 @@ struct ContentView: View {
                 } label: {
                     Label("Open Repo…", systemImage: "folder")
                 }
+            }
+            ToolbarItem(placement: .primaryAction) {
+                ResetButton(session: workspace.activeSession)
             }
             ToolbarItem(placement: .primaryAction) {
                 ApplyButton(

@@ -17,13 +17,20 @@ struct RebaseEngine {
 
     // MARK: - Load
 
-    /// Load up to `depth` most recent commits on the current branch.
-    /// Returns the commits oldest-first (matching the `git rebase -i`
-    /// TODO order on screen), the base commit's SHA, the branch name,
-    /// and `chopableTotal` — the maximum number of commits the user
-    /// can ever load into the plan (= total non-merge commits minus
-    /// the root, since the root must always be the rebase base).
-    func loadPlan(depth: Int = 12) throws -> (
+    /// Load commits for the plan. Two modes:
+    ///   • `customBase == nil` (default): load up to `depth` most recent
+    ///     commits and use the (depth+1)th as the rebase base.
+    ///   • `customBase != nil`: load every non-merge commit between that
+    ///     SHA and HEAD; depth is ignored. This is the "Use as base"
+    ///     flow — user explicitly picks where the rebase starts instead
+    ///     of counting commits.
+    ///
+    /// Returns the commits oldest-first (matching `git rebase -i`'s
+    /// TODO order), the base commit's SHA, the branch name, and
+    /// `chopableTotal` — the upper bound on how many commits could
+    /// load into the plan in depth-mode, or the actual plan size in
+    /// custom-base mode.
+    func loadPlan(depth: Int = 12, customBase: String? = nil) throws -> (
         plan: [PlanItem], base: String, branch: String, chopableTotal: Int
     ) {
         // Detect repo root so a path like `/repo/subdir` still works.
@@ -45,6 +52,42 @@ struct RebaseEngine {
         // compute base = `<oldest>^`, which exploded with
         // "ambiguous argument 'sha^'" the first time someone asked
         // for all commits in a repo with no leading merge layers.
+        // Format string is shared between depth-mode and custom-base
+        // mode so parsing is uniform.
+        // %x09 = TAB. Split on TAB so subjects with spaces stay intact.
+        // Format: full-sha \t short-sha \t author \t date \t unix-ts \t subject
+        let format = "%H%x09%h%x09%an%x09%ad%x09%ct%x09%s"
+
+        // Custom-base mode: load every non-merge commit between
+        // <customBase> and HEAD, no depth cap. The user explicitly
+        // chose this base, so we don't second-guess by counting.
+        if let customBase = customBase {
+            let logResult = try runner.run([
+                "log", "--no-merges",
+                "--date=format:%b %-d, %Y",
+                "--pretty=format:\(format)",
+                "\(customBase)..HEAD",
+            ])
+            guard logResult.isSuccess else {
+                throw EngineError.gitFailed("git log \(customBase)..HEAD: \(logResult.stderr)")
+            }
+            let planCommits: [Commit] = logResult.stdout
+                .split(separator: "\n", omittingEmptySubsequences: true)
+                .reversed()
+                .compactMap(Self.parseCommitLine)
+            guard !planCommits.isEmpty else {
+                throw EngineError.tooFewCommits
+            }
+            return (
+                plan: planCommits.map { PlanItem(commit: $0, verb: .pick) },
+                base: customBase,
+                branch: branch,
+                // No "load more" affordance in custom-base mode — the
+                // user fixed the start point, so this IS the total.
+                chopableTotal: planCommits.count
+            )
+        }
+
         let totalNoMergeResult = try runner.run(["rev-list", "--count", "--no-merges", "HEAD"])
         let totalNoMerge = Int(totalNoMergeResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
         let chopableTotal = max(0, totalNoMerge - 1)
@@ -60,12 +103,6 @@ struct RebaseEngine {
         // the case where the (n+1)th commit happens to be the root —
         // the root naturally ends up as the base instead of breaking
         // the load.
-        //
-        // %x09 = TAB. Split on TAB so subjects with spaces stay intact.
-        // Format: full-sha \t short-sha \t author \t date \t unix-ts \t subject
-        // %ct (committer date, unix epoch) gives us a stable timestamp
-        // for the relative-age column without a second log invocation.
-        let format = "%H%x09%h%x09%an%x09%ad%x09%ct%x09%s"
         let logResult = try runner.run([
             "log", "-\(n + 1)", "--no-merges",
             "--date=format:%b %-d, %Y",
@@ -80,18 +117,7 @@ struct RebaseEngine {
         let allCommits: [Commit] = logResult.stdout
             .split(separator: "\n", omittingEmptySubsequences: true)
             .reversed()
-            .compactMap { line in
-                let parts = line.split(separator: "\t", maxSplits: 5, omittingEmptySubsequences: false)
-                guard parts.count == 6 else { return nil }
-                return Commit(
-                    fullHash: String(parts[0]),
-                    shortHash: String(parts[1]),
-                    subject: String(parts[5]),
-                    author: String(parts[2]),
-                    date: String(parts[3]),
-                    timestamp: TimeInterval(String(parts[4])) ?? 0
-                )
-            }
+            .compactMap(Self.parseCommitLine)
 
         // Need at least 2: one for the base and one for the plan.
         guard allCommits.count >= 2, let baseCommit = allCommits.first else {
@@ -104,6 +130,22 @@ struct RebaseEngine {
             base: baseCommit.fullHash,
             branch: branch,
             chopableTotal: chopableTotal
+        )
+    }
+
+    /// Parse a single TAB-separated `git log --pretty=format` line into
+    /// a Commit. Returns nil for malformed lines so the caller can
+    /// `compactMap` over a streamed log.
+    private static func parseCommitLine(_ line: any StringProtocol) -> Commit? {
+        let parts = line.split(separator: "\t", maxSplits: 5, omittingEmptySubsequences: false)
+        guard parts.count == 6 else { return nil }
+        return Commit(
+            fullHash: String(parts[0]),
+            shortHash: String(parts[1]),
+            subject: String(parts[5]),
+            author: String(parts[2]),
+            date: String(parts[3]),
+            timestamp: TimeInterval(String(parts[4])) ?? 0
         )
     }
 
@@ -162,6 +204,16 @@ struct RebaseEngine {
     }
 
     func apply(plan: [PlanItem], base: String) throws -> (RebaseOutcome, ActiveRebase?) {
+        // 0. Stale-rebase guard. If `.git/rebase-merge` is already on
+        //    disk (previous session crashed, force-quit, etc.), git
+        //    will refuse to start a new rebase. Auto-abort the stale
+        //    state — the user clicked Apply with intent to start fresh,
+        //    and the in-flight rebase is no longer reachable from the
+        //    UI (no ActiveRebase reference exists).
+        if isRebaseInProgress() {
+            _ = try? runner.run(["rebase", "--abort"])
+        }
+
         // 1. Backup ref so the pre-rebase tip is recoverable.
         let timestamp = Self.timestampString()
         let backupRef = "refs/gitchop-backup/\(timestamp)"
@@ -371,10 +423,38 @@ struct RebaseEngine {
             active.log += format(result: cont, label: "rebase --continue")
             if !cont.isSuccess {
                 // Continue failed. If unmerged files appeared, surface
-                // as conflict; otherwise treat as terminal failure.
+                // as conflict.
                 let conflictsAfter = unmergedFiles()
                 if !conflictsAfter.isEmpty {
                     return (RebaseOutcome(kind: .conflicted(files: conflictsAfter), log: active.log, backupRef: active.backupRef), active)
+                }
+                // Empty-cherry-pick recovery. After a successful merge
+                // (no remaining unmerged paths), --continue can still
+                // exit non-zero if the resolved tree introduces no
+                // changes — git refuses empty commits and asks for
+                // --skip or --allow-empty. Auto-skip: the conflicting
+                // commit's content is already present in HEAD from an
+                // earlier rebase step, so dropping it is the right
+                // outcome ~99% of the time. Detected via stderr text
+                // because there's no exit code that distinguishes this
+                // from other failure modes.
+                let stderr = cont.stderr.lowercased()
+                let stdout = cont.stdout.lowercased()
+                let isEmpty = (stderr.contains("now empty")
+                               || stdout.contains("now empty")
+                               || stderr.contains("nothing to commit")
+                               || stdout.contains("nothing to commit"))
+                if isEmpty && isRebaseInProgress() {
+                    active.log += "\n  Empty cherry-pick — auto-skipping.\n"
+                    let skip = try runner.run(["rebase", "--skip"], env: active.env)
+                    active.log += format(result: skip, label: "rebase --skip (auto, empty)")
+                    if !skip.isSuccess {
+                        // --skip itself failed — bail out as terminal.
+                        break
+                    }
+                    // Loop back; next iteration's gate decides what's
+                    // next (success / pause / new conflict).
+                    continue
                 }
                 break
             }

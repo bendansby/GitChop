@@ -92,16 +92,19 @@ Refuse to Apply if:
 The warnings can be inline in the confirm sheet, with a "Apply
 anyway" button for the rare cases where the user knows better.
 
-### Custom range picker   ·   value: low–medium   ·   cost: 4h
+### Custom range picker   ·   value: low–medium   ·   cost: ~~4h~~ DONE
 
-Today the only knobs are 12 / 25 / 50 / 100 / All in the depth menu.
-Add: click any commit in the list and pick "Base from here" — the
-plan reloads with that commit as the base. Also a "Pick base…" item
-in the depth menu that opens a small commit-search UI.
+Right-click any commit in the list → "Use as base". The clicked
+commit becomes the rebase base (excluded from the plan, matching
+`git rebase -i <sha>`'s semantics) and everything newer than it
+becomes the plan. The header's count pill switches to "N commits
+from abc1234" so the pinned base is visible at a glance, and the
+depth menu collapses to a single "Switch to depth-based loading"
+item until the user reverts.
 
-Real-world rebases often start with "I want to rebase from <some
-shared parent commit>", not "the last N." Today the user has to
-mentally count.
+Not done: the "Pick base…" search sheet from the original entry —
+deferred to v0.4 since right-click-on-row plus the existing depth
+"All" option covers the realistic flow (load all, scroll, right-click).
 
 ---
 

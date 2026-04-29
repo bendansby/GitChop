@@ -43,6 +43,12 @@ final class RebaseSession: ObservableObject, Identifiable {
     /// reachable depth (e.g. asking for 50 in a 24-commit repo loads 24).
     @Published var requestedDepth: Int = 12
 
+    /// When set, the plan is loaded from `<customBase>..HEAD` and the
+    /// depth menu's count knobs don't apply. Set by "Use as base" on a
+    /// commit row's context menu; cleared by the menu's "Switch to
+    /// depth-based loading" option.
+    @Published var customBase: String? = nil
+
     /// Total non-merge commits reachable from HEAD. Used to decide
     /// whether to show "load more" / "load all" affordances.
     @Published var totalNonMergeCount: Int = 0
@@ -102,7 +108,7 @@ final class RebaseSession: ObservableObject, Identifiable {
         let d = depth ?? requestedDepth
         let engine = RebaseEngine(runner: GitRunner(cwd: repo))
         do {
-            let result = try engine.loadPlan(depth: d)
+            let result = try engine.loadPlan(depth: d, customBase: customBase)
             plan = result.plan
             baseHash = result.base
             branch = result.branch.isEmpty ? "(detached)" : result.branch
@@ -204,6 +210,24 @@ final class RebaseSession: ObservableObject, Identifiable {
     func loadAll() {
         guard totalNonMergeCount > 0 else { return }
         reload(depth: totalNonMergeCount)
+    }
+
+    /// Pin the plan to start from this specific commit. Everything
+    /// above the chosen commit (newer) becomes the plan; the commit
+    /// itself becomes the rebase base. Equivalent to `git rebase -i
+    /// <sha>` from the terminal.
+    func setCustomBase(_ sha: String) {
+        guard let repo = repoURL else { return }
+        customBase = sha
+        load(repo: repo)
+    }
+
+    /// Drop the custom base and revert to depth-based loading at the
+    /// current `requestedDepth`.
+    func clearCustomBase() {
+        guard let repo = repoURL else { return }
+        customBase = nil
+        load(repo: repo)
     }
 
     // MARK: - Mutate plan

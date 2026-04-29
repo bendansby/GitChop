@@ -24,6 +24,23 @@ struct CommitListView: View {
                             isSelected: session.selectedID == item.id
                         )
                         .tag(item.id)
+                        .contextMenu {
+                            // "Use as base" matches git's semantics
+                            // for `git rebase -i <sha>`: the chosen
+                            // commit is the foundation and is NOT in
+                            // the plan; everything newer than it gets
+                            // replayed onto it. To put the clicked
+                            // commit IN the plan, the user picks the
+                            // commit below it instead.
+                            Button {
+                                session.setCustomBase(item.commit.fullHash)
+                            } label: {
+                                Label("Use as base", systemImage: "arrow.down.to.line")
+                            }
+                            // Disabled when the clicked commit IS the
+                            // newest — there'd be no plan above it.
+                            .disabled(idx == session.plan.count - 1)
+                        }
                     }
                     .onMove { offsets, destination in
                         session.move(from: offsets, to: destination)
@@ -60,33 +77,43 @@ struct CommitListView: View {
     }
 
     /// Header-embedded depth picker. Click the count → choose how many
-    /// commits to load.
+    /// commits to load. In custom-base mode the depth knobs go away
+    /// (depth doesn't apply when the base is fixed) and a "Switch to
+    /// depth-based loading" item appears instead.
     private var depthMenu: some View {
         Menu {
-            ForEach([12, 25, 50, 100], id: \.self) { d in
+            if session.customBase != nil {
                 Button {
-                    session.reload(depth: d)
+                    session.clearCustomBase()
                 } label: {
-                    if d == session.plan.count {
-                        Label("Last \(d) commits", systemImage: "checkmark")
-                    } else {
-                        Text("Last \(d) commits")
-                    }
+                    Label("Switch to depth-based loading", systemImage: "arrow.uturn.backward")
                 }
-                // A choice that's >= the chopable max while we already
-                // hit that max is meaningless, so disable it.
-                .disabled(d > session.totalNonMergeCount && session.plan.count >= session.totalNonMergeCount)
-            }
-            Divider()
-            Button {
-                session.loadAll()
-            } label: {
-                if session.plan.count == session.totalNonMergeCount && session.totalNonMergeCount > 0 {
-                    Label("All \(session.totalNonMergeCount) commits", systemImage: "checkmark")
-                } else if session.totalNonMergeCount > 0 {
-                    Text("All \(session.totalNonMergeCount) commits")
-                } else {
-                    Text("All commits")
+            } else {
+                ForEach([12, 25, 50, 100], id: \.self) { d in
+                    Button {
+                        session.reload(depth: d)
+                    } label: {
+                        if d == session.plan.count {
+                            Label("Last \(d) commits", systemImage: "checkmark")
+                        } else {
+                            Text("Last \(d) commits")
+                        }
+                    }
+                    // A choice that's >= the chopable max while we already
+                    // hit that max is meaningless, so disable it.
+                    .disabled(d > session.totalNonMergeCount && session.plan.count >= session.totalNonMergeCount)
+                }
+                Divider()
+                Button {
+                    session.loadAll()
+                } label: {
+                    if session.plan.count == session.totalNonMergeCount && session.totalNonMergeCount > 0 {
+                        Label("All \(session.totalNonMergeCount) commits", systemImage: "checkmark")
+                    } else if session.totalNonMergeCount > 0 {
+                        Text("All \(session.totalNonMergeCount) commits")
+                    } else {
+                        Text("All commits")
+                    }
                 }
             }
         } label: {
@@ -113,8 +140,20 @@ struct CommitListView: View {
     }
 
     /// "12 commits" when everything's loaded; "12 of 24 commits" when
-    /// the view is intentionally truncated to a depth less than total.
+    /// the view is intentionally truncated to a depth less than total;
+    /// "12 commits from abc1234" in custom-base mode so the user can
+    /// see at a glance which commit they pinned the rebase to.
     private var headerCountLabel: String {
+        if let base = session.customBase {
+            // Show first 7 chars; full SHA in the help tooltip via the
+            // menu's wrapper. Strip any trailing `^` since we don't
+            // currently use parent-suffix syntax (kept for future).
+            let displayBase = base.hasSuffix("^")
+                ? String(base.dropLast())
+                : base
+            let short = String(displayBase.prefix(7))
+            return "\(session.plan.count) commit\(session.plan.count == 1 ? "" : "s") from \(short)"
+        }
         if session.totalNonMergeCount > 0 && session.plan.count < session.totalNonMergeCount {
             return "\(session.plan.count) of \(session.totalNonMergeCount) commits"
         }
@@ -375,7 +414,7 @@ private struct CommitRow: View {
         } label: {
             HStack(spacing: 4) {
                 Text(item.verb.glyph)
-                    .font(.system(.caption, design: .monospaced).bold())
+                    .font(.system(size: 15, design: .monospaced).bold())
                 Text(item.verb.rawValue)
                     .font(.system(.caption, design: .monospaced))
                 // Bucket-count badge: only shown for edit rows that

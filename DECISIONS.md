@@ -384,3 +384,241 @@ neighbors" — one concept, one place.
 The "no indicator at all" option felt like a loss because squash
 and fixup are *relational* verbs — without the visual cue, users
 have to remember which row they were attaching to from memory.
+
+---
+
+## Sparkle as a SwiftPM binary XCFramework, manually copied at build
+
+**Choice:** Sparkle is added via SwiftPM (`.package(url: …Sparkle…)`)
+as a binary XCFramework, but `scripts/build-app.sh` manually copies
+`Sparkle.framework` from `.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/`
+into `Contents/Frameworks/`. `Package.swift` carries an `unsafeFlags`
+linker setting that adds `@executable_path/../Frameworks` to the
+binary's rpath so dyld finds it.
+
+**Alternatives:**
+- Build Sparkle from source (StyleBop's `build_sparkle.sh` does this
+  to get an `arm64e` slice the StyleBop SDK target needs).
+- Use Xcode "Embed & Sign" (only works in Xcode-project builds, not
+  SwiftPM `swift build`).
+- Don't use Sparkle, ship without auto-update.
+
+**Why:** SwiftPM resolves and links the binary fine, but doesn't copy
+the framework bundle into the .app the way Xcode does. Without our
+manual copy, dyld would fail at launch with "Library not loaded:
+@rpath/Sparkle.framework". The vendored copy + the explicit rpath
+linker flag is the smallest delta from a stock SwiftPM build that
+gets us a working framework load. Building Sparkle from source
+(StyleBop's path) would also work but adds a multi-minute one-time
+setup step and requires Xcode toolchain checkout — not worth it
+when the official binary release covers our `arm64 + x86_64` target.
+
+---
+
+## `--options runtime` and `--timestamp` are gated on a real Developer ID
+
+**Choice:** `build-app.sh` only adds hardened-runtime + secure-timestamp
+codesign flags when `SIGN_IDENTITY != "-"`. Local-dev ad-hoc signing
+gets `--force --sign -` and nothing else.
+
+**Alternatives:** always pass `--options runtime --timestamp` regardless
+of identity (matches the release-build path).
+
+**Why:** macOS's library-validation rule under hardened runtime
+rejects loading frameworks signed with a different team identifier
+from the loading binary. With ad-hoc signing both are "team
+identifier not set" — should match — but the loader applies stricter
+rules anyway, and Sparkle.framework's nested helpers fail to load at
+launch with "different Team IDs". Simplest fix: skip hardened runtime
+in ad-hoc local-dev builds where notarization isn't a concern. The
+release pipeline still gets the full hardened-runtime + timestamp
+treatment because it always passes a real Developer ID.
+
+---
+
+## MainWindowAccessor singleton, not `NSApp.mainWindow`
+
+**Choice:** `MainWindowAccessor` is a tiny `NSViewRepresentable` that
+records the document NSWindow into `MainWindowReference.shared.window`
+on first appear. The `Close Tab` ⌘W command compares
+`NSApp.keyWindow !== MainWindowReference.shared.window` to decide
+whether to route the keystroke to the focused secondary window
+(Preferences, etc.) instead of closing a background tab.
+
+**Alternatives:** compare `NSApp.keyWindow !== NSApp.mainWindow`.
+
+**Why:** on macOS 14+ the Settings scene's window can claim main-
+window status when it's focused — `NSApp.mainWindow` returns the
+Preferences window, not the GitChop document window. The check
+`keyWindow !== mainWindow` then evaluates false (both point at
+Preferences), the routing fails, and ⌘W silently closes a tab
+behind the Preferences window. Tagging our actual document window
+when it appears, via the accessor, gives a stable reference that
+isn't subject to whatever the system has decided is "main" right
+now. This shows up in `ORIENTATION.md` as a generalized lesson:
+anything in `ContentView`'s scope that needs to read session state
+needs its own observer subview, and anything in the menu bar that
+needs to know "is the main window key" needs this reference.
+
+---
+
+## Reword writes per-SHA scratch files, not a single map
+
+**Choice:** at apply time the engine writes each reworded commit's
+new full message to its own file at
+`/tmp/gitchop-reword-<uuid>/<sha>`, then sets `$GIT_EDITOR` to a tiny
+shell helper that `cat`s the matching file into git's `COMMIT_EDITMSG`.
+The helper finds the in-flight SHA by reading
+`.git/rebase-merge/done`'s last line.
+
+**Alternatives:** a single TAB-separated map file
+(`<sha>\t<subject>` per line) parsed by the helper at editor time.
+
+**Why:** the original BACKLOG entry imagined a single map. That works
+for subject-only edits, but full-message rework with arbitrary body
+content (multiple lines, special chars, etc.) makes shell-quoting
+the contents into the helper's awk lookup uncomfortable. One file
+per SHA sidesteps escaping entirely — `cp $dir/$sha $msgfile` is
+the whole transformation. Squash combined-message edits also pass
+through this helper but miss the dir and exit cleanly, leaving
+the default merged message intact.
+
+---
+
+## `runSplit` re-parses live diff before each bucket
+
+**Choice:** at apply time, `runSplit` runs `git diff HEAD` and
+re-parses hunks **before each bucket**, not once at the start. Each
+bucket reassembles using *live* hunks (current line numbers) and
+applies that.
+
+Hunk IDs are content-stable: `"<file>::<+/- body lines>"` (no `@@`
+header, no context). The same hunk re-parsed against a different
+working-tree state still has the same ID as long as its actual
+changes are the same.
+
+**Alternatives:** parse once at the start of `runSplit` (the original
+1-pass design); reassemble using the parse-time line numbers and
+trust `git apply --recount` to correct shifts.
+
+**Why:** a single up-front parse breaks once any upstream rebase
+step has shifted the file's content before this commit gets reached.
+`--recount` corrects line-number drift but not context-content drift,
+so the bucket's stored hunk header pointed at lines that no longer
+matched the file. Re-parsing per bucket means we always reassemble
+against the working-tree state `git apply` will see. Plus, after
+bucket 1 commits, bucket 2's parse sees the diff *minus* bucket 1's
+hunks — which is exactly what should be applied next.
+
+The remaining failure mode (an upstream step *changed* a context
+line's content, not just shifted its position) is a true 3-way
+merge problem and still rolls back. BACKLOG tracks it under
+"Hardening".
+
+---
+
+## `status` is a computed property, not a stored String
+
+**Choice:** `RebaseSession.status` is a computed property that derives
+"Loaded N of M on branch" live from `plan.count` + `totalNonMergeCount`
++ `branch`. One-off action messages (load errors, conflict notices,
+rebase-failed-and-restored) go through a separate `actionMessage:
+String?` override that's cleared on the next successful `load()`.
+
+**Alternatives:** a stored `@Published var status: String` that every
+mutation site has to keep in sync.
+
+**Why:** the stored-string version drifted whenever any caller changed
+`plan.count` or `totalNonMergeCount` without also re-setting status —
+the bottom-bar text would say "Loaded 12 of 14" while the header
+already showed 14 of 14. A computed property reads live values on
+every render, so it can't go stale. Action-message override gives
+us a way to surface transient notices without giving up the live
+default. Pairs with a `StatusBar` subview that `@ObservedObject`s
+the session so changes to `plan` / `totalNonMergeCount` /
+`actionMessage` actually trigger re-renders (a recurring pattern —
+see the "ApplyButton needs its own observer" entry above for the
+generalized lesson).
+
+---
+
+## Preferences singleton: @MainActor instance + nonisolated static for git path
+
+**Choice:** `Preferences` is a `@MainActor`-isolated `ObservableObject`
+singleton holding the `@Published` properties bound to PreferencesView.
+But `Preferences.resolvedGitPath()` is a `nonisolated static func` that
+reads from `UserDefaults.standard` directly (and `which git` if the
+user hasn't set a custom path).
+
+**Alternatives:** make the whole class nonisolated; or call
+`MainActor.assumeIsolated { Preferences.shared.resolvedGitPath() }`
+from background tasks.
+
+**Why:** `GitRunner.run` is called from background tasks (e.g. the
+hunk-count loader is `Task.detached`). It needs the git path on every
+invocation. An instance method on a `@MainActor` singleton would
+require crossing the actor boundary on every git call. A nonisolated
+static reading directly from `UserDefaults` is thread-safe and
+avoids the hop. The `@MainActor` instance still exists for the
+`@Published` bindings the SwiftUI view needs.
+
+The same split applies to nested-type access: keys are hoisted to
+file-scope `fileprivate enum PreferencesKeys` (rather than nested
+inside the class) so the nonisolated static can name them without
+inheriting the class's actor isolation.
+
+---
+
+## Tab strip auto-hides when only one repo is open
+
+**Choice:** `ContentView` only renders `TabStripView` when
+`workspace.sessions.count > 1`. Single-tab users never see the bar.
+
+**Alternatives:** always show the strip; never show it (rely on the
+window menu).
+
+**Why:** the strip is empty chrome 90% of the time for a
+single-repo user — they open one repo, they work in it, they close
+the app. Showing the strip adds visual noise and pushes the commit
+list down. Hiding it preserves the "this is just my one rebase
+window" feel until the user actually opens a second repo, at which
+point the strip appears with both tabs. The transition is a single
+SwiftUI conditional, no extra plumbing needed.
+
+---
+
+## Custom rebase base via right-click "Use as base", not a search sheet
+
+**Choice:** right-click any commit in the list → *Use as base*. The
+clicked commit becomes the rebase foundation (excluded from the
+plan, matching `git rebase -i <sha>`'s semantics). The header pill
+flips to "N commits from abc1234"; the depth menu collapses to a
+single "Switch to depth-based loading" item until the user reverts.
+
+**Alternatives:** a "Pick base…" search sheet with a commit-finder
+UI (the original BACKLOG entry).
+
+**Why:** right-click + load-all covers the realistic flow without
+extra UI. Real-world cases are "I want to rebase from this commit I
+can already see" — for which a context menu on the visible commit
+is faster than a search modal. The search-sheet variant is still
+filed (now under v1.1 candidates) but isn't a v1 ship-blocker.
+
+---
+
+## Tab-close confirmation goes through a single Workspace dialog
+
+**Choice:** both the tab-strip's X button and the Close Tab ⌘W
+command call `workspace.requestClose(_ id:)`, which checks
+`session.hasChanges` and either closes immediately (no changes) or
+sets `pendingClose = session` (changes pending). `ContentView`
+surfaces a confirmationDialog bound to that field; Discard / Cancel
+buttons resolve via `confirmPendingClose()` / `cancelPendingClose()`.
+
+**Alternatives:** show the dialog inline at each call site; or
+no confirmation at all.
+
+**Why:** two close paths share one chokepoint, so the dialog text and
+behavior never drift between them. If we ever add a third close
+path (a window-close handler, an "Open Recent" replacement, etc.) it
+just calls `requestClose(_:)` and gets the same protection for free.

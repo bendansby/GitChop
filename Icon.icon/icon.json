@@ -1,0 +1,28 @@
+{
+  "fill" : {
+    "automatic-gradient" : "srgb:0.32061,0.10793,0.66275,1.00000"
+  },
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "image-name" : "ChatGPT Image Apr 28, 2026 at 07_50_24 PM 1 [Vectorized].svg",
+          "name" : "ChatGPT Image Apr 28, 2026 at 07_50_24 PM 1 [Vectorized]"
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.5
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "squares" : [
+      "macOS"
+    ]
+  }
+}

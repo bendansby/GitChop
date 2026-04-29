@@ -13,9 +13,9 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
+    <string>0.3.0</string>
     <key>CFBundleVersion</key>
-    <string>0.1.0</string>
+    <string>0.3.0</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>
@@ -24,5 +24,18 @@
     <string>NSApplication</string>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.developer-tools</string>
+
+    <!-- Sparkle update feed -->
+    <key>SUFeedURL</key>
+    <string>https://bendansby.com/apps/gitchop/appcast.xml</string>
+    <!-- Shared EdDSA public key across this workspace's apps. The matching
+         private key lives in the macOS Keychain under https://sparkle-project.org;
+         losing that key orphans every shipped install from updates. -->
+    <key>SUPublicEDKey</key>
+    <string>nBzSfv0fqmlzU1CIIs0vlIReBFKdnGdWMHWqXt3z/Jo=</string>
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
+    <key>SUScheduledCheckInterval</key>
+    <integer>86400</integer>
 </dict>
 </plist>

@@ -1,0 +1,25 @@
+<h2>What's new</h2>
+<ul>
+  <li><strong>Reword in place.</strong> Pick <code>reword</code> from a commit's verb chip — a modal opens with the full original message preloaded. Edit, save, applied at rebase time without any editor pop-ups.</li>
+  <li><strong>Conflict pause.</strong> When a rebase stops on a merge conflict, GitChop now stays open with a list of unmerged files. Open each in your editor, click Continue. Or Skip the commit, or Abort the whole rebase. No bouncing back to the terminal.</li>
+  <li><strong>Mid-rebase reorder.</strong> While paused on a conflict, the still-pending commits show up alongside as a drag-reorderable list. Reorder them before clicking Continue and git picks up the new sequence.</li>
+  <li><strong>Custom rebase base.</strong> Right-click any commit → <em>Use as base</em>. Everything newer than it becomes the editable plan. Equivalent to <code>git rebase -i &lt;sha&gt;</code> from the terminal.</li>
+  <li><strong>Split-bucket previews.</strong> An edit commit with a configured split now expands inline to show one ghost row per bucket — colored badge, em-dash placeholder hash, the bucket subject — so you can see at a glance what the split will produce.</li>
+  <li><strong>Reset toolbar button.</strong> Discards in-flight plan edits without touching git. Confirmation prompt before discarding.</li>
+  <li><strong>Chronology column.</strong> Compact relative-age token (<code>3d</code>, <code>2w</code>, <code>5mo</code>) on every row, with the absolute date as a tooltip.</li>
+</ul>
+
+<h2>Robustness</h2>
+<ul>
+  <li><strong>Split-commit re-parse.</strong> Each bucket's hunks are now re-parsed against the live working tree before applying. Splits no longer fail when an upstream rebase step has shifted the file's line numbers.</li>
+  <li><strong>Stale-rebase recovery.</strong> If GitChop crashes or you force-quit mid-rebase, the next Apply detects the orphaned <code>.git/rebase-merge</code> and cleans it up before starting fresh.</li>
+  <li><strong>Empty cherry-pick auto-skip.</strong> When resolving a conflict produces no changes (because the change is already in HEAD), GitChop runs <code>--skip</code> automatically instead of stalling on git's "now empty" error.</li>
+</ul>
+
+<h2>Polish</h2>
+<ul>
+  <li>Drop rows get a soft red wash; bucket ghost rows are tinted to match their bucket card colors.</li>
+  <li>Live "Loaded N of M" status text — never goes stale relative to the actual loaded plan.</li>
+  <li>Verb chip menu's Edit option is grayed out with "Not available — commit has only 1 hunk" when splitting wouldn't produce multiple commits.</li>
+  <li>New app icon.</li>
+</ul>

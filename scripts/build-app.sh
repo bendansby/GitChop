@@ -31,10 +31,25 @@ STAGE="$(mktemp -d -t GitChop-build)"
 trap 'rm -rf "$STAGE"' EXIT
 APP_DIR="$STAGE/$APP_NAME.app"
 CONTENTS="$APP_DIR/Contents"
-mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
+mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources" "$CONTENTS/Frameworks"
 
 ditto --noextattr --noacl "$BIN" "$CONTENTS/MacOS/$APP_NAME"
 ditto --noextattr --noacl "Resources/Info.plist" "$CONTENTS/Info.plist"
+
+# ── Sparkle framework ────────────────────────────────────────────────
+# SwiftPM resolves Sparkle as a binary XCFramework but doesn't copy the
+# framework bundle into the .app for us. We pull it out of the resolved
+# artifacts and embed under Contents/Frameworks/Sparkle.framework. The
+# macos-arm64_x86_64 slice covers both architectures the universal
+# binary above is built for.
+SPARKLE_XCFW="$ROOT/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework"
+SPARKLE_SRC="$SPARKLE_XCFW/macos-arm64_x86_64/Sparkle.framework"
+if [[ ! -d "$SPARKLE_SRC" ]]; then
+    echo "==> Resolving Sparkle (first build only)"
+    swift package resolve >/dev/null
+fi
+[[ -d "$SPARKLE_SRC" ]] || { echo "!! Sparkle.framework not found at $SPARKLE_SRC" >&2; exit 1; }
+ditto --noextattr --noacl "$SPARKLE_SRC" "$CONTENTS/Frameworks/Sparkle.framework"
 
 # AppIcon: build/AppIcon.icns from Icon.png if present (regenerated when
 # the PNG is newer). Skipped silently if no source PNG yet — the app
@@ -66,6 +81,33 @@ fi
 xattr -cr "$APP_DIR"
 
 echo "==> Signing (identity: $SIGN_IDENTITY)"
+# Inside-out signing. Codesign requires nested bundles (XPC services,
+# Updater.app, Autoupdate) to be signed before the framework, and the
+# framework before the outer app. --preserve-metadata=entitlements
+# keeps Sparkle's required entitlements on its helpers; without it
+# the XPC services lose their sandbox/entitlement claims and the
+# updater silently fails to launch them.
+SPARKLE_FW="$CONTENTS/Frameworks/Sparkle.framework"
+if [[ -d "$SPARKLE_FW" ]]; then
+    for xpc in "$SPARKLE_FW/Versions/B/XPCServices/"*.xpc; do
+        [[ -d "$xpc" ]] || continue
+        codesign --force --options runtime --timestamp \
+            --preserve-metadata=entitlements \
+            --sign "$SIGN_IDENTITY" "$xpc"
+    done
+    if [[ -e "$SPARKLE_FW/Versions/B/Autoupdate" ]]; then
+        codesign --force --options runtime --timestamp \
+            --sign "$SIGN_IDENTITY" "$SPARKLE_FW/Versions/B/Autoupdate"
+    fi
+    if [[ -d "$SPARKLE_FW/Versions/B/Updater.app" ]]; then
+        codesign --force --options runtime --timestamp \
+            --preserve-metadata=entitlements \
+            --sign "$SIGN_IDENTITY" "$SPARKLE_FW/Versions/B/Updater.app"
+    fi
+    codesign --force --options runtime --timestamp \
+        --sign "$SIGN_IDENTITY" "$SPARKLE_FW"
+fi
+
 SIGN_ARGS=(--force --options runtime --timestamp)
 if [[ -f GitChop.entitlements ]]; then
     SIGN_ARGS+=(--entitlements GitChop.entitlements)

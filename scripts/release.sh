@@ -54,6 +54,17 @@ echo "==> Building app bundle ($APP_NAME $APP_VERSION_SHORT)"
 SIGN_IDENTITY="$SIGN_IDENTITY" INSTALL=0 \
     bash scripts/build-app.sh
 
+# === STAGE OUT OF iCLOUD ===
+# Workspace under ~/Documents is iCloud-Drive-synced. During the
+# ~3-min notarytool wait, iCloud renames the bundle through
+# "<App> 2.app" … "<App> 5.app" as if it were a sync conflict,
+# deleting the canonical path so stapler can't find it. /tmp isn't
+# synced — staging there sidesteps the whole class of failures.
+NOTARY_APP="/tmp/$APP_NAME-notary.app"
+rm -rf "$NOTARY_APP"
+ditto "$APP_PATH" "$NOTARY_APP"
+APP_PATH="$NOTARY_APP"
+
 # === NOTARIZE THE APP ===
 echo "==> Notarizing $APP_NAME.app"
 ZIP="$ROOT/build/$APP_NAME.zip"

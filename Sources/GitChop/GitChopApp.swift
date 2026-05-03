@@ -6,6 +6,16 @@ import Sparkle
 struct GitChopApp: App {
     @StateObject private var workspace = Workspace()
 
+    init() {
+        // System tab bar (the NSWindow auto-tabbing that adds Show/Hide
+        // Tab Bar, Merge All Windows, etc. to the Window menu) doesn't
+        // make sense for a single-window app whose multi-repo story is
+        // its own in-window tab strip. Turn it off so users don't get
+        // both — the system menu items disappear and ⌘⇧T no longer
+        // tries to merge.
+        NSWindow.allowsAutomaticWindowTabbing = false
+    }
+
     /// Standard Sparkle controller. Wires up automatic background checks
     /// (interval + enable flag come from Info.plist's
     /// SUEnableAutomaticChecks / SUScheduledCheckInterval), surfaces the
@@ -18,7 +28,7 @@ struct GitChopApp: App {
     )
 
     var body: some Scene {
-        WindowGroup("GitChop") {
+        WindowGroup("GitChop", id: "main") {
             ContentView()
                 .environmentObject(workspace)
                 .frame(minWidth: 900, minHeight: 600)
@@ -34,9 +44,13 @@ struct GitChopApp: App {
         .commands {
             CommandGroup(replacing: .newItem) { }
             CommandGroup(after: .newItem) {
-                Button("Open Repo…") { workspace.openPicker() }
-                    .keyboardShortcut("o", modifiers: .command)
-                Button("Close Tab") {
+                // Use a tiny subview so we can pick up @Environment's
+                // openWindow — Command builders don't otherwise have it.
+                // Without this, ⌘O / Open Repo… on an app with no
+                // window open runs the file picker but has nowhere to
+                // surface the resulting tab.
+                OpenRepoMenuItem(workspace: workspace)
+                Button("Close Repo") {
                     // ⌘W is bound globally for this command, so it
                     // fires regardless of which window has focus.
                     // When a secondary window (Preferences, etc.) is
@@ -62,6 +76,41 @@ struct GitChopApp: App {
                 CheckForUpdatesView(updater: updaterController.updater)
             }
         }
+    }
+}
+
+/// "Open Repo…" menu item with ⌘O. Lives in its own subview so the
+/// `@Environment(\.openWindow)` value is accessible — the App scene's
+/// command builders can't read environment values directly. If no
+/// document window currently exists (the user closed it but left the
+/// app running), open one before showing the picker, otherwise the
+/// picker would run with no window to surface the resulting tab in.
+private struct OpenRepoMenuItem: View {
+    @ObservedObject var workspace: Workspace
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("Open Repo…") {
+            // If a window is already up, reuse the workspace's existing
+            // openPicker — picker, then add the new tab to that window.
+            if MainWindowReference.shared.window?.isVisible == true {
+                workspace.openPicker()
+                return
+            }
+            // Otherwise run the picker first, ourselves, so the user
+            // can cancel without leaving an empty window behind. Only
+            // on success do we open the window + add the session.
+            let panel = NSOpenPanel()
+            panel.canChooseFiles = false
+            panel.canChooseDirectories = true
+            panel.allowsMultipleSelection = false
+            panel.prompt = "Open"
+            panel.message = "Pick a git repository."
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            openWindow(id: "main")
+            workspace.openRepo(url)
+        }
+        .keyboardShortcut("o", modifiers: .command)
     }
 }
 

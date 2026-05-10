@@ -43,7 +43,7 @@ enum Verb: String, CaseIterable, Identifiable {
     var color: Color {
         switch self {
         case .pick:   return Color(.secondaryLabelColor)
-        case .reword: return Color(red: 0.85, green: 0.55, blue: 0.10)   // amber
+        case .reword: return Color(red: 0.70, green: 0.42, blue: 0.05)   // amber (deepened for ≥4.5:1 contrast on white)
         case .edit:   return Color(red: 0.55, green: 0.30, blue: 0.85)   // violet
         case .squash: return Color(red: 0.10, green: 0.41, blue: 0.84)
         case .fixup:  return Color(red: 0.18, green: 0.55, blue: 0.34)

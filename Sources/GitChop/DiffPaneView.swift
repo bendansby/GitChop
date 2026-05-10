@@ -113,6 +113,7 @@ struct DiffPaneView: View {
     private var diffBody: some View {
         let lines = session.diffText.split(separator: "\n", omittingEmptySubsequences: false)
         let gutterWidth = lineNumberGutterWidth(for: lines.count)
+        let summary = diffAccessibilitySummary(lines: lines)
 
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(lines.enumerated()), id: \.offset) { idx, line in
@@ -137,6 +138,27 @@ struct DiffPaneView: View {
                 }
             }
         }
+        // VO would otherwise read each diff line as a separate element
+        // and produce a wall of "minus space minus minus" garbage. Group
+        // and label the whole pane with a stat summary; the textSelection
+        // children stay reachable for users who want line-level detail.
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(Text("Diff. \(summary)"))
+    }
+
+    /// "+12 added, -3 removed, across 4 hunks." — high-level summary
+    /// of the current diff for VoiceOver.
+    private func diffAccessibilitySummary<S: StringProtocol>(lines: [S]) -> String {
+        var added = 0, removed = 0, hunks = 0
+        for line in lines {
+            if line.hasPrefix("+") && !line.hasPrefix("+++") { added += 1 }
+            else if line.hasPrefix("-") && !line.hasPrefix("---") { removed += 1 }
+            else if line.hasPrefix("@@ ") { hunks += 1 }
+        }
+        if added == 0 && removed == 0 && hunks == 0 {
+            return "No changes."
+        }
+        return "\(added) added, \(removed) removed, across \(hunks) \(hunks == 1 ? "hunk" : "hunks")."
     }
 
     /// Subtle color hint for diff structure: + green, - red, @@ blue,

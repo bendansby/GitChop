@@ -24,6 +24,20 @@ struct CommitListView: View {
                             isSelected: session.selectedID == item.id
                         )
                         .tag(item.id)
+                        // ── Accessibility ──────────────────────────
+                        // Mouse drag-reorder isn't reachable via VO or
+                        // Voice Control. These two actions surface in
+                        // the VO actions rotor (VO+⌘+space then arrow)
+                        // and Voice Control's "show actions" menu so
+                        // both can drive the rebase reorder.
+                        .accessibilityAction(named: Text("Move up")) {
+                            guard idx > 0 else { return }
+                            session.move(from: IndexSet([idx]), to: idx - 1)
+                        }
+                        .accessibilityAction(named: Text("Move down")) {
+                            guard idx < session.plan.count - 1 else { return }
+                            session.move(from: IndexSet([idx]), to: idx + 2)
+                        }
                         .contextMenu {
                             // "Use as base" matches git's semantics
                             // for `git rebase -i <sha>`: the chosen
@@ -436,6 +450,11 @@ private struct CommitRow: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
+        // VO would otherwise just call this "popup button" with the
+        // chip glyph + verb name. Be explicit so the user knows what
+        // the chip controls and what it's currently set to.
+        .accessibilityLabel("Verb for commit \(item.commit.shortHash)")
+        .accessibilityValue(item.verb.rawValue)
     }
 }
 

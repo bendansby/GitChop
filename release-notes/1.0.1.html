@@ -1,6 +1,18 @@
-<h2>Changes</h2>
+<h2>Localized into eight languages</h2>
+<p>GitChop now ships with English, Spanish, French, German, Japanese, Simplified Chinese, Korean, and Brazilian Portuguese. Verb names (<code>pick</code>, <code>reword</code>, <code>edit</code>, <code>squash</code>, <code>fixup</code>, <code>drop</code>) stay in English everywhere — they're the literal git commands and recognizable in any locale. Everything else (buttons, sheet titles, verb explanations, status messages, conflict-sheet copy) translates to the system language.</p>
+
+<h2>Accessibility</h2>
 <ul>
-  <li><strong>Open Repo… no longer leaves an empty window behind</strong> if you cancel the picker. The window only opens once you've actually chosen a repo.</li>
+  <li><strong>Drag-reorder via VoiceOver and Voice Control.</strong> Every commit row carries Move up / Move down actions that surface in VoiceOver's actions rotor and Voice Control's actions menu, so non-mouse users can drive the rebase reorder.</li>
+  <li><strong>Better chip labels.</strong> The verb chip announces as "Verb for commit abc1234" with a separate value of "pick" / "reword" / etc., instead of a generic "popup button" read.</li>
+  <li><strong>Diff pane reads as one element</strong> with a summary like "Diff. 12 added, 3 removed, across 4 hunks." Line-level navigation stays available for users who want it.</li>
+  <li><strong>Reword amber deepened</strong> for higher contrast on white — clears WCAG AA body-text on the row subject and status-line text.</li>
+</ul>
+
+<h2>Smaller fixes</h2>
+<ul>
+  <li><strong>Open Repo… no longer leaves an empty window behind</strong> if you cancel the picker. The window opens once you've actually chosen a repo.</li>
   <li><strong>"Close Tab" is now "Close Repo"</strong> in the File menu, matching the in-app language.</li>
-  <li><strong>System window tabbing disabled.</strong> GitChop's own tab strip is the multi-repo story, so macOS's Show/Hide Tab Bar and Merge All Windows items no longer appear in the Window menu.</li>
+  <li><strong>System window tabbing disabled.</strong> macOS's Show/Hide Tab Bar and Merge All Windows items no longer appear in the Window menu — GitChop's own tab strip is the multi-repo story.</li>
+  <li><strong>Tab strip auto-hides</strong> when only one repo is open.</li>
 </ul>

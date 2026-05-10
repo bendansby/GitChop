@@ -25,6 +25,23 @@
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.developer-tools</string>
 
+    <!-- Declared localizations. Keep in sync with localizations/<lang>.lproj/.
+         Lets the system know which locales the app supports so it can
+         pick a fallback that matches the user's preferred-language list. -->
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleLocalizations</key>
+    <array>
+        <string>en</string>
+        <string>es</string>
+        <string>fr</string>
+        <string>de</string>
+        <string>ja</string>
+        <string>zh-Hans</string>
+        <string>ko</string>
+        <string>pt-BR</string>
+    </array>
+
     <!-- Sparkle update feed -->
     <key>SUFeedURL</key>
     <string>https://bendansby.com/apps/gitchop/appcast.xml</string>

@@ -36,6 +36,17 @@ mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources" "$CONTENTS/Frameworks"
 ditto --noextattr --noacl "$BIN" "$CONTENTS/MacOS/$APP_NAME"
 ditto --noextattr --noacl "Resources/Info.plist" "$CONTENTS/Info.plist"
 
+# Localized strings: copy each <lang>.lproj/Localizable.strings into
+# Contents/Resources/<lang>.lproj/. SwiftUI's Text(LocalizedStringKey)
+# resolves against Bundle.main, which looks here for the active
+# locale's .strings file.
+if [[ -d localizations ]]; then
+    for lproj in localizations/*.lproj; do
+        [[ -d "$lproj" ]] || continue
+        ditto --noextattr --noacl "$lproj" "$CONTENTS/Resources/$(basename "$lproj")"
+    done
+fi
+
 # ── Sparkle framework ────────────────────────────────────────────────
 # SwiftPM resolves Sparkle as a binary XCFramework but doesn't copy the
 # framework bundle into the .app for us. We pull it out of the resolved

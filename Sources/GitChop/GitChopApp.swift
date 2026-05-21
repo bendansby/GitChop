@@ -75,6 +75,18 @@ struct GitChopApp: App {
             CommandGroup(after: .appInfo) {
                 CheckForUpdatesView(updater: updaterController.updater)
             }
+            // Replace the default (do-nothing without a Help book)
+            // "GitChop Help" item with one that opens the published
+            // docs in the user's default browser. `Link` inside a
+            // CommandGroup renders as a regular menu item; it handles
+            // the URL open itself, no NSWorkspace shim needed.
+            CommandGroup(replacing: .help) {
+                Link(
+                    "GitChop Help",
+                    destination: URL(string: "https://bendansby.com/apps/gitchop/docs.html")!
+                )
+                .keyboardShortcut("?", modifiers: .command)
+            }
         }
     }
 }

@@ -9,3 +9,6 @@ Package.resolved
 # Sample Project/repo/. It's regenerable from the script — never
 # tracked by GitChop's outer repo. Re-run init.sh to refresh.
 Sample Project/repo/
+
+# Claude Code session transcript snapshot. Personal log, not source.
+.claude-chat-transcript.jsonl

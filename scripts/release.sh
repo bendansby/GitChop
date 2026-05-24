@@ -24,7 +24,7 @@ APP_NAME="GitChop"
 APP_SUBPATH="gitchop"
 BUNDLE_ID="com.bendansby.GitChop"
 SIGN_IDENTITY="Developer ID Application: Benjamin Dansby (8CYGCS6F34)"
-NOTARY_PROFILE="gitchop-notary"
+NOTARY_PROFILE="${NOTARY_PROFILE:-notarytool}"
 
 # Version comes from Info.plist so the in-app About box and the DMG
 # filename never disagree.
